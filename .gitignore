@@ -1,0 +1,6 @@
+build/
+vendor/
+*.qcow2
+*.img
+*.log
+.DS_Store
