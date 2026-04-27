@@ -23,11 +23,27 @@ local symlink `Assert.HC` so the tree reads cleanly.
 
 ```
 src/             our HolyC port (.HC files)
+  Bootstrap.HC   shared helpers + stubs (sorts first; pushed first)
+  …              every other module
 tests/           test framework symlink + T_*.HC battery
 quake-src/       id Software Quake (read-only reference)
 devkit/          upstream dev tooling (lint, daemon, holycc parser)
 build/           VM artefacts (gitignored)
 ```
+
+## Push order (cross-file dependencies)
+
+`temple-run.py` pushes `src/*.HC` in alphabetical order, then
+`tests/Assert.HC`, then `tests/T_*.HC`. ExePutS resolves identifiers
+at parse time, so a module that uses `Q_strcmp` must be pushed AFTER
+`Bootstrap.HC` (which defines it). The convention:
+
+- `Bootstrap.HC` — sorts first (`B` < `C`/`Q`/etc.) — shared helpers.
+- Module files use plain PascalCase names that sort after `B`.
+- If a new shared file is needed, name it so it sorts before its
+  consumers (e.g. `Common.HC` is fine because `C…` files that depend
+  on it would be named after their feature like `Cmd.HC`, `Cvar.HC`).
+- For complex cross-deps, pass `--order=A.HC,B.HC,…` to `temple-run.py`.
 
 ## Dev loop
 
