@@ -1,6 +1,6 @@
 [submodule "devkit"]
 	path = devkit
-	url = git@github.com:rshtirmer/templeos-devkit.git
+	url = git@github.com:JRickey/temple-quake-devkit.git
 [submodule "quake-src"]
 	path = quake-src
 	url = git@github.com:id-Software/Quake.git
