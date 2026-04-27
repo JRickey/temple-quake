@@ -63,27 +63,38 @@ errors. Keep watching that log when iterating.
 ## Workflow rule: every quirk we find ships back to the devkit
 
 When porting work surfaces a HolyC quirk that isn't already caught
-offline, **the same commit cycle covers BOTH tools** in the devkit:
+offline, the fix ships **upstream into the devkit** so every future
+HolyC project benefits. Each tool owns a different domain — pick
+the right one:
+
+**`holycc` (Rust parser)** owns everything semantic:
+- Syntax errors anywhere (missing tokens, malformed expressions)
+- Scope-aware checks (file-scope `return`/labels, `for(F64 i…)`)
+- Name resolution (`unresolved-identifier`, cross-file lookup)
+- Reserved-name collisions, F32 references, exponent literals
+- Operator-precedence and bug-compat behaviors
+- Type-system checks (future)
+
+**`holyc-lint.py` (Python regex)** owns only:
+- Lex-level errors (unterminated strings/comments, balance)
+- Formatting (tabs, trailing whitespace, max line length)
+- Cheap heuristic warnings (parametrized `#define`,
+  `Sys("…")` deadlock pattern)
+
+When you find a new quirk:
 
 1. Fix the port locally so the test goes green.
-2. Add a regex/token rule to `holyc-lint.py` (devkit) — fast, named
-   error message, paired bad-/good- fixture in `tests/lint/`.
-3. Add the equivalent check to `holycc` (Rust parser) — full AST
-   pass, ideally with a corpus snippet under `holyc-parser/tests/corpus/`.
-4. PR both upstream as one batch (or two coupled PRs) targeting
-   `rshtirmer/templeos-devkit`.
-5. Bump our submodule pin to the merged HEAD.
-6. Verify `make lint` and `make test` both still green on the
+2. Decide which tool owns it (parser unless it's pure formatting
+   or a lex-only pattern). Add the rule there. Add a regression
+   test (corpus snippet for the parser, paired bad-/good- fixture
+   for lint).
+3. PR upstream targeting `rshtirmer/templeos-devkit`.
+4. Bump our submodule pin to the merged HEAD.
+5. Verify `make lint` and `make test` both still green on the
    port that surfaced the quirk.
 
-The discipline here matters. Lint and parser drift apart if we
-only update one — and the port that surfaced the issue is the
-exact regression test we want for both. Don't ship a quirk fix
-that only updates one tool.
-
-If a quirk genuinely fits one tool but not the other (e.g. a deep
-type-check the regex linter can't approximate), say so explicitly
-in the PR description; don't silently skip.
+If a quirk genuinely needs both tools (very rare since the
+specialization), say so in the PR description.
 
 ### Independence of the two projects
 
