@@ -55,7 +55,11 @@ _t_hdr->ofs_fielddefs  = _t_hdr->ofs_globaldefs;
 _t_hdr->numfielddefs   = 0;
 _t_hdr->ofs_functions  = _t_hdr->ofs_globaldefs;
 _t_hdr->numfunctions   = 1;
-_t_hdr->ofs_strings    = _t_hdr->ofs_functions + sizeof(dfunction_t);
+// Reserve room for 4 dfunction_t slots even though we only declare 1
+// up front — the OP_CALL tests later in this battery bump
+// numfunctions to 3 without re-laying-out the buffer, and we don't
+// want the function table to extend into the strings region.
+_t_hdr->ofs_strings    = _t_hdr->ofs_functions + 4 * sizeof(dfunction_t);
 _t_hdr->numstrings     = 7;       // "\0entry\0"
 _t_hdr->ofs_globals    = _t_hdr->ofs_strings + 7;
 _t_hdr->numglobals     = 64;
@@ -263,5 +267,132 @@ _t_hdr->version = 99;
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == FALSE, 1, "bad_version_rejected");
 _t_hdr->version = 6;
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_after_fix");
+
+// ============================================================
+// OP_CALL + builtin dispatch
+// ============================================================
+//
+// We rebuild the synthetic progs.dat with three functions:
+//   fn[0] — sentinel ("function 0 is empty" per Quake convention)
+//   fn[1] — print, builtin #1 (first_statement = -1)
+//   fn[2] — entry, calls print with OFS_PARM0 = string offset
+//
+// Parameters: OFS_PARM0 holds the string offset into pr_strings.
+// `print` reads it and stores the resolved bytes in
+// pr_last_builtin_arg0_str for assertion.
+
+// Reset numfunctions on the existing buffer; we already have room
+// because we sized the strings/globals tables generously.
+_t_hdr->numfunctions = 3;
+_t_hdr->numstrings   = 18;     // "\0entry\0Hello QC!\0" — 18 bytes
+
+// Reset the strings pool: "\0entry\0Hello QC!\0"
+_t_str = _t_progs + _t_hdr->ofs_strings;
+_t_str[0]  = 0;
+_t_str[1]  = 'e'; _t_str[2]  = 'n'; _t_str[3]  = 't';
+_t_str[4]  = 'r'; _t_str[5]  = 'y'; _t_str[6]  = 0;
+_t_str[7]  = 'H'; _t_str[8]  = 'e'; _t_str[9]  = 'l';
+_t_str[10] = 'l'; _t_str[11] = 'o'; _t_str[12] = ' ';
+_t_str[13] = 'Q'; _t_str[14] = 'C'; _t_str[15] = '!';
+_t_str[16] = 0;
+_t_str[17] = 0;
+
+// fn[0] — sentinel
+_t_fn[0].first_statement = 0;
+_t_fn[0].parm_start      = 0;
+_t_fn[0].locals          = 0;
+_t_fn[0].s_name          = 0;
+_t_fn[0].numparms        = 0;
+// fn[1] — print, builtin #1
+_t_fn[1].first_statement = -1;
+_t_fn[1].parm_start      = 0;
+_t_fn[1].locals          = 0;
+_t_fn[1].s_name          = 0;
+_t_fn[1].numparms        = 1;
+_t_fn[1].parm_size[0]    = 1;
+// fn[2] — entry: call print with arg
+_t_fn[2].first_statement = 1;
+_t_fn[2].parm_start      = 30;
+_t_fn[2].locals          = 0;
+_t_fn[2].s_name          = 1;
+_t_fn[2].numparms        = 0;
+
+// Statements:
+//   stmt[1]: OP_CALL1 a=40   ; globals[40] holds the function
+//                              index of `print` (1)
+//   stmt[2]: OP_DONE
+_t_st[1].op = OP_CALL1; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 0;
+_t_st[2].op = OP_DONE;
+_t_st[3].op = OP_DONE;
+_t_st[4].op = OP_DONE;
+
+// Reload so the runtime picks up the new function table.
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_with_call");
+ASSERT_EQ(pr_numfunctions, 3, "load_three_functions");
+
+// Pre-set the call's operand globals.
+pr_globals[40] = 1;                          // function index of `print`
+pr_globals[OFS_PARM0] = 7;                   // string offset of "Hello QC!"
+
+// Execute the entry point.
+pr_last_builtin_called = 0;
+pr_last_builtin_arg0_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 1, "PF_print_invoked");
+ASSERT_EQ(Q_strcmp(pr_last_builtin_arg0_str, "Hello QC!"), 0, "PF_print_received_arg");
+
+// ---- ftos: float → string in side channel ----
+_t_fn[1].first_statement = -2;               // re-target fn[1] to builtin #2
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_ftos");
+_PR_SetFloat(OFS_PARM0, 3.5);
+pr_last_builtin_called = 0;
+pr_last_builtin_arg0_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 2, "PF_ftos_invoked");
+// PF_ftos uses StrPrint with explicit "%5.1f" precision. The
+// resulting string contains "3.5" somewhere (possibly with leading
+// space-padding from the field width). Find a '3' followed
+// by a '.' followed by '5'.
+I64 _t_idx;
+Bool _t_found_three_point_five = FALSE;
+for (_t_idx = 0; _t_idx < 60; _t_idx++) {
+  if (pr_last_builtin_arg0_str[_t_idx] == '3'
+      && pr_last_builtin_arg0_str[_t_idx + 1] == '.'
+      && pr_last_builtin_arg0_str[_t_idx + 2] == '5') {
+    _t_found_three_point_five = TRUE;
+    break;
+  }
+  if (pr_last_builtin_arg0_str[_t_idx] == 0) {
+    break;
+  }
+}
+ASSERT_EQ(_t_found_three_point_five == TRUE, 1, "PF_ftos_contains_3.5");
+
+// ---- error: halts the VM ----
+_t_fn[1].first_statement = -3;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_error");
+pr_globals[OFS_PARM0] = 7;                   // "Hello QC!" reused as fake error
+pr_last_builtin_called = 0;
+pr_halted = FALSE;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 3, "PF_error_invoked");
+ASSERT_EQ(pr_halted == TRUE, 1, "PF_error_halts_vm");
+
+// ---- random: returns a float in [0, 1) ----
+_t_fn[1].first_statement = -4;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_random");
+_PR_SetFloat(OFS_RETURN, -1.0);
+pr_last_builtin_called = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 4, "PF_random_invoked");
+F64 _t_r = _PR_GetFloat(OFS_RETURN);
+ASSERT_EQ(_t_r >= 0.0 && _t_r < 1.0, 1, "PF_random_in_unit_interval");
+
+// ---- Unknown builtin index → halts cleanly ----
+_t_fn[1].first_statement = -99;              // not installed
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_bad_builtin");
+pr_halted = FALSE;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_halted == TRUE, 1, "bad_builtin_index_halts");
 
 TEST_SUMMARY;

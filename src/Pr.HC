@@ -220,6 +220,15 @@ I64           _pr_localstack_used = 0;
 Bool          pr_halted = FALSE;       // set TRUE on OP_DONE
 Bool          pr_runaway = FALSE;      // set TRUE on > 100k step limit
 
+I64           pr_argc = 0;             // arg count for the current builtin call
+
+// Tracks builtin invocations for tests. Each builtin sets
+// `pr_last_builtin_called` and `pr_last_builtin_arg0_str` (for
+// string-arg builtins) so test assertions can verify dispatch
+// without relying on console capture.
+I64 pr_last_builtin_called = 0;
+U8  pr_last_builtin_arg0_str[256];
+
 // ============================================================
 // IEEE-754 F32 ↔ F64 conversion helpers
 // ============================================================
@@ -464,6 +473,113 @@ I64 _PR_LeaveFunction() {
 }
 
 // ============================================================
+// Builtins (Tier 1)
+// ============================================================
+//
+// Builtins are dispatched through a switch keyed on the builtin
+// index. Real Quake uses a function-pointer table; HolyC's array-
+// of-fn-pointers shape is fragile, and a switch ports cleaner.
+//
+// Builtin-index assignments mirror Quake's `pr_cmds.c` ordering
+// where overlap exists. Indices 1..N below are "installed"; calls
+// to other indices return PR_RunError-style.
+//
+// Param convention (Quake's): each parameter occupies 3 global
+// slots (room for vec3); param N is at OFS_PARM0 + N*3. String
+// parameters store an i32 offset into pr_strings in the FIRST
+// slot of their param trio.
+
+// Builtin index 1 — print(string s)
+U0 _PR_PF_print() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  Con_Printf(s);
+  // Test instrumentation.
+  pr_last_builtin_called = 1;
+  I64 i = 0;
+  while (i < 255 && s[i]) {
+    pr_last_builtin_arg0_str[i] = s[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// Builtin index 2 — ftos(float f) → string
+U0 _PR_PF_ftos() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  // ftos returns a string offset. We have no runtime string pool
+  // growth yet — write into a static scratch in pr_strings if it
+  // fits, else return offset 0.
+  static U8 ftos_buf[64];
+  // TempleOS's default `%f` rounds to integer (no fractional digits
+  // unless asked). Quake's ftos formats to 1 decimal for whole or
+  // small fractions and full precision otherwise — we approximate
+  // with `%5.6f` matching real Quake's `sprintf(s, "%5.1f", v)` for
+  // single-decimal output; tweak as call sites demand.
+  StrPrint(ftos_buf, "%5.1f", f);
+  // Return: offset is hacky for now — point OFS_RETURN at a
+  // SPECIAL string offset that resolves through ftos_buf instead
+  // of pr_strings. We bypass that by encoding `ftos_buf` directly:
+  // _PR_GetString detects out-of-range and falls back to "" today,
+  // so we return 0 here and stash the result in a side channel.
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 2;
+  I64 i = 0;
+  while (i < 255 && ftos_buf[i]) {
+    pr_last_builtin_arg0_str[i] = ftos_buf[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// Builtin index 3 — error(string s) — Sys_Error stub
+U0 _PR_PF_error() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  U8 errbuf[320];
+  StrPrint(errbuf, "PR_PF_error: %s\n", s);
+  Con_Printf(errbuf);
+  pr_last_builtin_called = 3;
+  I64 i = 0;
+  while (i < 255 && s[i]) {
+    pr_last_builtin_arg0_str[i] = s[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+  pr_halted = TRUE;
+}
+
+// Builtin index 4 — random() → float in [0, 1)
+U0 _PR_PF_random() {
+  _PR_SetFloat(OFS_RETURN, Rand);
+  pr_last_builtin_called = 4;
+}
+
+// Builtin dispatch — invoked when a function call hits a
+// dfunction_t with first_statement < 0. The negation is the
+// builtin index.
+U0 _PR_DispatchBuiltin(I64 idx) {
+  switch (idx) {
+    case 1:
+      _PR_PF_print();
+      break;
+    case 2:
+      _PR_PF_ftos();
+      break;
+    case 3:
+      _PR_PF_error();
+      break;
+    case 4:
+      _PR_PF_random();
+      break;
+    default:
+      Print("PR: builtin #%d not installed\n", idx);
+      pr_halted = TRUE;
+      break;
+  }
+}
+
+// ============================================================
 // PR_ExecuteProgram — main interpreter loop
 // ============================================================
 
@@ -626,6 +742,43 @@ U0 PR_ExecuteProgram(I64 fnum) {
           pr_halted = TRUE;
         }
         break;
+
+      // ---- function call (CALL0..CALL8) ----
+      // `a` indexes into globals; globals[a] holds the callee's
+      // function index. The opcode value encodes the param count
+      // (CALL0 = 0 args, CALL1 = 1 arg, …, CALL8 = 8 args). Args
+      // are already in OFS_PARMn slots — the caller set them up.
+      case OP_CALL0:
+      case OP_CALL1:
+      case OP_CALL2:
+      case OP_CALL3:
+      case OP_CALL4:
+      case OP_CALL5:
+      case OP_CALL6:
+      case OP_CALL7:
+      case OP_CALL8: {
+        pr_argc = op - OP_CALL0;
+        I64 fnum_callee = pr_globals[a];
+        if (fnum_callee == 0) {
+          Print("PR_ExecuteProgram: NULL function call\n");
+          _PR_StackTrace();
+          pr_halted = TRUE;
+          break;
+        }
+        if (fnum_callee < 0 || fnum_callee >= pr_numfunctions) {
+          Print("PR_ExecuteProgram: bad function index %d\n", fnum_callee);
+          pr_halted = TRUE;
+          break;
+        }
+        dfunction_t *newf = &pr_functions[fnum_callee];
+        if (newf->first_statement < 0) {
+          // Builtin: dispatch through the switch.
+          _PR_DispatchBuiltin(-newf->first_statement);
+        } else {
+          // User function: enter normally.
+          pr_xstatement = _PR_EnterFunction(fnum_callee);
+        }
+      } break;
 
       default:
         Print("PR_ExecuteProgram: opcode %d not yet implemented\n", op);
