@@ -8,15 +8,24 @@
 // implementation take over.
 
 // ----------------------------------------------------------------
-// Memory: Z_Malloc / Z_Free / Q_memcpy
+// Memory: Z_Malloc / Z_Free
 // ----------------------------------------------------------------
 //
-// Quake's zone allocator (zone.c) is a custom pool over a fixed
-// hunk. We delegate to TempleOS's MAlloc/Free for now — same API
-// shape. zone.c port will replace this.
+// Quake's zone allocator was a custom small-block allocator over
+// a fixed hunk. On TempleOS the kernel's MAlloc/Free already do
+// what's needed; the Zone API is a shim. Zone.HC ports the rest
+// of the Hunk_/Cache_ surface; these two stay here in Bootstrap
+// because every consumer uses them.
+//
+// Quake spec: Z_Malloc returns ZERO-FILLED memory. Don't drop the
+// MemSet — callers (cvar.c, cmd.c, …) rely on it for clean state.
 
 U8 *Z_Malloc(I64 size) {
-  return MAlloc(size);
+  U8 *p = MAlloc(size);
+  if (p) {
+    MemSet(p, 0, size);
+  }
+  return p;
 }
 
 U0 Z_Free(U8 *p) {
