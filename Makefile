@@ -33,7 +33,12 @@ test test-temple:
 	$(MAKE) -C $(DEVKIT) test-temple T="$(T)"
 
 lint:
-	python3 $(DEVKIT)/scripts/holyc-lint.py $(REPO)/src/*.ZC $(REPO)/tests/T_*.ZC
+	python3 $(DEVKIT)/scripts/holyc-lint.py $(REPO)/src $(REPO)/tests
+	@if [ -x $(DEVKIT)/holyc-parser/target/release/holycc ]; then \
+		$(DEVKIT)/holyc-parser/target/release/holycc lint $(REPO)/src $(REPO)/tests; \
+	else \
+		echo "(skipping holycc — run 'cargo build --release -C $(DEVKIT)/holyc-parser' to enable)"; \
+	fi
 
 down:
 	@if [ -S $(DEVKIT)/build/qemu-temple.sock ]; then \
