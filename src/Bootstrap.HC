@@ -107,26 +107,13 @@ U0 Con_Printf(U8 *msg) {
 }
 
 // ----------------------------------------------------------------
-// Command system: Cmd_Argc / Cmd_Argv / Cmd_Exists
+// Command system: ported in Cmd.HC.
 // ----------------------------------------------------------------
 //
-// Replaced when we port cmd.c. Stubs return "no args, nothing
-// exists" so cvar.c paths that call these treat the command system
-// as empty.
-
-I64 Cmd_Argc() {
-  return 0;
-}
-
-U8 *Cmd_Argv(I64 idx) {
-  // Return a stable empty string. Callers compare to "" or use the
-  // result as a cvar name lookup that will fail to find anything.
-  return "";
-}
-
-Bool Cmd_Exists(U8 *name) {
-  return FALSE;
-}
+// Cmd_Argc / Cmd_Argv / Cmd_Exists used to be stubbed here; the
+// real implementations now live in Cmd.HC, which sorts after
+// Bootstrap.HC and before Cvar.HC, so Cvar.HC sees the real
+// command-system entry points when it pushes.
 
 // ----------------------------------------------------------------
 // Server: SV_BroadcastPrintf, sv.active
