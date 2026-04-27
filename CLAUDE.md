@@ -60,6 +60,45 @@ in `devkit/build/serial-temple.log` between `COMPILE_ERR_BEGIN` /
 `COMPILE_ERR_END` markers — no screenshot OCR needed for compile
 errors. Keep watching that log when iterating.
 
+## Workflow rule: every quirk we find ships back to the devkit
+
+When porting work surfaces a HolyC quirk that isn't already caught
+offline, **the same commit cycle covers BOTH tools** in the devkit:
+
+1. Fix the port locally so the test goes green.
+2. Add a regex/token rule to `holyc-lint.py` (devkit) — fast, named
+   error message, paired bad-/good- fixture in `tests/lint/`.
+3. Add the equivalent check to `holycc` (Rust parser) — full AST
+   pass, ideally with a corpus snippet under `holyc-parser/tests/corpus/`.
+4. PR both upstream as one batch (or two coupled PRs) targeting
+   `rshtirmer/templeos-devkit`.
+5. Bump our submodule pin to the merged HEAD.
+6. Verify `make lint` and `make test` both still green on the
+   port that surfaced the quirk.
+
+The discipline here matters. Lint and parser drift apart if we
+only update one — and the port that surfaced the issue is the
+exact regression test we want for both. Don't ship a quirk fix
+that only updates one tool.
+
+If a quirk genuinely fits one tool but not the other (e.g. a deep
+type-check the regex linter can't approximate), say so explicitly
+in the PR description; don't silently skip.
+
+### Independence of the two projects
+
+**The devkit is a generic TempleOS HolyC dev environment. This
+repo (temple-quake) is one specific consumer.** Anything we
+contribute upstream — lint rules, parser features, error capture
+machinery — must be framed as "discovered during TempleOS
+experimentation," not "needed for Quake." Don't reference the
+Quake port (or any other downstream project) in upstream code,
+PR descriptions, comments, commit messages, or test fixtures.
+
+This isn't aesthetics. It keeps the devkit usable by anyone
+porting anything to TempleOS, and keeps our quirk-discovery work
+durable beyond this project.
+
 ## Porting workflow
 
 1. Pick a small Quake module in `quake-src/WinQuake/foo.c`.
