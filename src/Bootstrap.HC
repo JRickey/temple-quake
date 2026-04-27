@@ -70,6 +70,129 @@ U0 Q_strcpy(U8 *dst, U8 *src) {
   StrCpy(dst, src);
 }
 
+// strncpy semantics: copy up to n bytes; if src is shorter than n,
+// pad the remainder with NUL. Standard C library behavior.
+U0 Q_strncpy(U8 *dst, U8 *src, I64 n) {
+  I64 i = 0;
+  while (i < n && src[i]) {
+    dst[i] = src[i];
+    i++;
+  }
+  while (i < n) {
+    dst[i] = 0;
+    i++;
+  }
+}
+
+U0 Q_strcat(U8 *dst, U8 *src) {
+  I64 i = StrLen(dst);
+  I64 j = 0;
+  while (src[j]) {
+    dst[i + j] = src[j];
+    j++;
+  }
+  dst[i + j] = 0;
+}
+
+U8 *Q_strrchr(U8 *s, I64 c) {
+  // Last occurrence of byte `c` in s, or NULL. Per C: a search for
+  // '\0' returns the pointer to the terminator.
+  U8 *last = NULL;
+  I64 i = 0;
+  while (TRUE) {
+    if (s[i] == c) {
+      last = &s[i];
+    }
+    if (!s[i]) {
+      break;
+    }
+    i++;
+  }
+  return last;
+}
+
+I64 Q_strcasecmp(U8 *a, U8 *b) {
+  // Case-insensitive ASCII compare.
+  I64 i = 0;
+  I64 ca;
+  I64 cb;
+  while (TRUE) {
+    ca = a[i];
+    cb = b[i];
+    if (ca >= 'A' && ca <= 'Z') {
+      ca = ca + ('a' - 'A');
+    }
+    if (cb >= 'A' && cb <= 'Z') {
+      cb = cb + ('a' - 'A');
+    }
+    if (ca != cb) {
+      return ca - cb;
+    }
+    if (!ca) {
+      return 0;
+    }
+    i++;
+  }
+  return 0;
+}
+
+I64 Q_strncasecmp(U8 *a, U8 *b, I64 n) {
+  I64 i;
+  I64 ca;
+  I64 cb;
+  for (i = 0; i < n; i++) {
+    ca = a[i];
+    cb = b[i];
+    if (ca >= 'A' && ca <= 'Z') {
+      ca = ca + ('a' - 'A');
+    }
+    if (cb >= 'A' && cb <= 'Z') {
+      cb = cb + ('a' - 'A');
+    }
+    if (ca != cb) {
+      return ca - cb;
+    }
+    if (!ca) {
+      return 0;
+    }
+  }
+  return 0;
+}
+
+I64 Q_atoi(U8 *s) {
+  // Decimal integer parser with leading sign. Hex/char-const corner
+  // cases from Quake's Q_atoi are out of scope for now.
+  I64 sign = 1;
+  I64 value = 0;
+  I64 i = 0;
+  if (s[0] == '-') {
+    sign = -1;
+    i = 1;
+  } else if (s[0] == '+') {
+    i = 1;
+  }
+  while (s[i] >= '0' && s[i] <= '9') {
+    value = value * 10 + (s[i] - '0');
+    i++;
+  }
+  return sign * value;
+}
+
+// Mem helpers — thin wrappers over TempleOS's MemSet/MemCpy/MemCmp,
+// kept under the Q_ namespace so call sites read the same as
+// upstream Quake.
+U0 Q_memset(U8 *dst, I64 fill, I64 count) {
+  MemSet(dst, fill, count);
+}
+
+U0 Q_memcpy(U8 *dst, U8 *src, I64 count) {
+  MemCpy(dst, src, count);
+}
+
+I64 Q_memcmp(U8 *a, U8 *b, I64 count) {
+  return MemCmp(a, b, count);
+}
+
 // Q_atof: very small float parser. Quake's `atof` allows a leading
 // `'X'` char-constant form (`'AB'` → multi-char int packed) plus
 // hex (`0xNN`), but in practice cvar values are always decimal —

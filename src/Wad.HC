@@ -77,17 +77,8 @@ I64         wad_numlumps = 0;
 lumpinfo_t *wad_lumps = NULL;
 U8         *wad_base = NULL;
 
-// On TempleOS (x86_64) every multi-byte integer is already little-
-// endian, so LittleLong is the identity. Kept as a function so the
-// call sites read the same as the original code and a future port to
-// a big-endian host would have one place to change.
-I32 LittleLong(I32 v) {
-  return v;
-}
-
-I16 LittleShort(I16 v) {
-  return v;
-}
+// Endian helpers: LittleLong / LittleShort live in Common.HC, which
+// sorts before Wad.HC in push order so they're already in scope.
 
 // Lowercase + pad with NUL to exactly 16 bytes. Used for the name
 // field on every lookup and on every lump in the loaded table so a
