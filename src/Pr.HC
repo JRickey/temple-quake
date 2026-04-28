@@ -775,14 +775,18 @@ U0 _PR_PF_ftos() {
   pr_last_builtin_arg0_str[i] = 0;
 }
 
-// #36 — rint(float f) → float (round to nearest int)
+// #36 — rint(float f) → float (round to nearest int).
+// HolyC's `expr(I64)` postfix is BIT REINTERPRETATION, not a
+// numeric conversion — `(2.7)(I64)` returns the F64 bit pattern
+// as I64, not the integer 2. So we lean on TempleOS's `Floor`
+// and `Ceil` builtins to do real rounding.
 U0 _PR_PF_rint() {
   F64 f = _PR_GetFloat(OFS_PARM0);
   F64 r;
-  if (f > 0.0) {
-    r = (f + 0.5)(I64);
+  if (f >= 0.0) {
+    r = Floor(f + 0.5);
   } else {
-    r = (f - 0.5)(I64);
+    r = Ceil(f - 0.5);
   }
   _PR_SetFloat(OFS_RETURN, r);
   pr_last_builtin_called = 36;
@@ -790,25 +794,13 @@ U0 _PR_PF_rint() {
 
 // #37 — floor(float f) → float
 U0 _PR_PF_floor() {
-  F64 f = _PR_GetFloat(OFS_PARM0);
-  I64 trunc = f(I64);
-  // C-style truncation rounds toward zero; floor rounds toward
-  // -inf. Adjust for negative non-integers.
-  if (f < 0.0 && trunc(F64) != f) {
-    trunc = trunc - 1;
-  }
-  _PR_SetFloat(OFS_RETURN, trunc(F64));
+  _PR_SetFloat(OFS_RETURN, Floor(_PR_GetFloat(OFS_PARM0)));
   pr_last_builtin_called = 37;
 }
 
 // #38 — ceil(float f) → float
 U0 _PR_PF_ceil() {
-  F64 f = _PR_GetFloat(OFS_PARM0);
-  I64 trunc = f(I64);
-  if (f > 0.0 && trunc(F64) != f) {
-    trunc = trunc + 1;
-  }
-  _PR_SetFloat(OFS_RETURN, trunc(F64));
+  _PR_SetFloat(OFS_RETURN, Ceil(_PR_GetFloat(OFS_PARM0)));
   pr_last_builtin_called = 38;
 }
 
