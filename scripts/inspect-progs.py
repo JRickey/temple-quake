@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Dump the dprograms_t header of a Quake progs.dat.
+"""Dump the dprograms_t header of a Quake progs.dat plus the
+builtin-index frequency histogram.
 
 Useful for sizing checks before pushing a file through our VM —
 compares the file's `entityfields`, `numglobals`, etc. against the
-limits compiled into src/Pr.HC (MAX_ENTITY_FIELDS, MAX_EDICTS,
-MAX_STACK_DEPTH, LOCALSTACK_SIZE).
+limits compiled into src/Pr.HC, and tells you which builtin
+indices a real progs is going to dispatch (so you know which ones
+to install before trying to execute it).
 
 Usage: scripts/inspect-progs.py <path/to/progs.dat>
 """
@@ -75,6 +77,52 @@ def main(argv: list[str]) -> int:
             print(f"  ! {i}")
         return 1
     print("  ok — should load")
+
+    # ---- builtin frequency histogram ----
+    # Each dfunction_t is 36 bytes laid out as:
+    #   i32 first_statement, parm_start, locals, profile,
+    #   i32 s_name, s_file, numparms,
+    #   u8 parm_size[8]
+    # first_statement < 0 → builtin; |first_statement| is the index.
+    # We also need the strings pool to print human names.
+    nfn = fields["numfunctions"]
+    fn_off = fields["ofs_functions"]
+    str_off = fields["ofs_strings"]
+    builtin_calls: dict[int, str] = {}
+    for i in range(nfn):
+        b = raw[fn_off + i * 36 : fn_off + (i + 1) * 36]
+        first = struct.unpack("<i", b[:4])[0]
+        if first < 0:
+            s_name = struct.unpack("<i", b[16:20])[0]
+            # Read NUL-terminated name from strings pool.
+            end = raw.index(b"\x00", str_off + s_name)
+            name = raw[str_off + s_name : end].decode("ascii", "replace")
+            idx = -first
+            builtin_calls[idx] = name
+
+    if builtin_calls:
+        print()
+        print(f"== builtins referenced ({len(builtin_calls)}) ==")
+        # The set installed in src/Pr.HC's _PR_DispatchBuiltin. Keep
+        # in sync — this is a pre-flight checklist, the live VM is
+        # the source of truth.
+        installed = {6, 7, 9, 10, 11, 12, 13, 19, 20, 25, 26,
+                     36, 37, 38, 43, 51}
+        rows: list[tuple[int, str, str]] = []
+        for idx in sorted(builtin_calls):
+            mark = "ok" if idx in installed else "MISSING"
+            rows.append((idx, builtin_calls[idx], mark))
+        idx_w = max(len(str(i)) for i, _, _ in rows)
+        name_w = max(len(n) for _, n, _ in rows)
+        for idx, name, mark in rows:
+            print(f"  #{idx:<{idx_w}}  {name:<{name_w}}  {mark}")
+        missing = [i for i, _, m in rows if m == "MISSING"]
+        if missing:
+            print()
+            print(f"  ! {len(missing)} of {len(rows)} builtins not yet "
+                  f"installed in our VM — add to _PR_DispatchBuiltin "
+                  f"before executing this progs.")
+            return 1
     return 0
 
 
