@@ -129,8 +129,13 @@
 // for the VM unit tests a much smaller pool is enough. Each edict
 // occupies `pr_entityfields` 4-byte slots in `pr_edicts`. Total slots
 // = MAX_EDICTS * MAX_ENTITY_FIELDS.
+//
+// MAX_ENTITY_FIELDS is sized for real progs.dat compatibility:
+// QuakeWorld's qwprogs.dat declares entityfields=194; vanilla Quake
+// progs.dat ~105. 256 leaves headroom and keeps the pool at
+// 64 * 256 * 4 = 64 KB.
 #define MAX_EDICTS         64
-#define MAX_ENTITY_FIELDS  64
+#define MAX_ENTITY_FIELDS  256
 
 // ============================================================
 // On-disk structures (pr_comp.h)
