@@ -1366,6 +1366,60 @@ U0 _PR_PF_infokey() {
   pr_last_builtin_called = 80;
 }
 
+// ============================================================
+// Phase 6 Batch 7 — multiplayer messaging (#23, #24, #73, #79, #82)
+// ============================================================
+// All are print/broadcast-shaped. Single shared pr_last_msg_*
+// channel records the most recent text + addressed client (when
+// applicable). pr_last_builtin_called distinguishes which kind.
+
+I64 pr_last_msg_client = 0;
+U8  pr_last_msg_str[256];
+I64 pr_last_logfrag_killer = 0;
+I64 pr_last_logfrag_victim = 0;
+I64 pr_last_multicast_dest = 0;
+
+// #23 — bprint(msg) — broadcast to all clients.
+U0 _PR_PF_bprint() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  Q_strncpy(pr_last_msg_str, _PR_GetString(strofs), 255);
+  pr_last_msg_str[255] = 0;
+  pr_last_msg_client = -1;                         // sentinel: broadcast
+  pr_last_builtin_called = 23;
+}
+
+// #24 — sprint(client, msg) — print to one client.
+U0 _PR_PF_sprint() {
+  pr_last_msg_client = pr_globals[OFS_PARM0];
+  I64 strofs = pr_globals[OFS_PARM1];
+  Q_strncpy(pr_last_msg_str, _PR_GetString(strofs), 255);
+  pr_last_msg_str[255] = 0;
+  pr_last_builtin_called = 24;
+}
+
+// #73 — centerprint(client, msg) — center-screen text.
+U0 _PR_PF_centerprint() {
+  pr_last_msg_client = pr_globals[OFS_PARM0];
+  I64 strofs = pr_globals[OFS_PARM1];
+  Q_strncpy(pr_last_msg_str, _PR_GetString(strofs), 255);
+  pr_last_msg_str[255] = 0;
+  pr_last_builtin_called = 73;
+}
+
+// #79 — logfrag(killer_ent, victim_ent) — record killer/victim.
+U0 _PR_PF_logfrag() {
+  pr_last_logfrag_killer = pr_globals[OFS_PARM0];
+  pr_last_logfrag_victim = pr_globals[OFS_PARM1];
+  pr_last_builtin_called = 79;
+}
+
+// #82 — multicast(origin, sendto) — flush multicast buffer.
+// We don't queue messages, just record the destination tag.
+U0 _PR_PF_multicast() {
+  pr_last_multicast_dest = _PR_GetFloat(OFS_PARM1);
+  pr_last_builtin_called = 82;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
@@ -1390,6 +1444,8 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 20: _PR_PF_precache_model();    break;
     case 21: _PR_PF_stuffcmd();          break;
     case 22: _PR_PF_findradius();        break;
+    case 23: _PR_PF_bprint();            break;
+    case 24: _PR_PF_sprint();            break;
     case 25: _PR_PF_dprint();            break;
     case 26: _PR_PF_ftos();              break;
     case 27: _PR_PF_vtos();              break;
@@ -1421,13 +1477,16 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 68: _PR_PF_precache_file();     break;
     case 69: _PR_PF_makestatic();        break;
     case 72: _PR_PF_cvar_set();          break;
+    case 73: _PR_PF_centerprint();       break;
     case 74: _PR_PF_ambientsound();      break;
     case 75: _PR_PF_precache_model2();   break;
     case 76: _PR_PF_precache_sound2();   break;
     case 77: _PR_PF_precache_file2();    break;
     case 78: _PR_PF_setspawnparms();     break;
+    case 79: _PR_PF_logfrag();           break;
     case 80: _PR_PF_infokey();           break;
     case 81: _PR_PF_stof();              break;
+    case 82: _PR_PF_multicast();         break;
     default:
       Print("PR: builtin #%d not installed\n", idx);
       pr_halted = TRUE;

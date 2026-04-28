@@ -108,11 +108,11 @@ def main(argv: list[str]) -> int:
         # the source of truth.
         installed = {1, 2, 3, 4,
                      6, 7, 9, 10, 11, 12, 13, 14, 15, 16,
-                     18, 19, 20, 21, 22, 25, 26,
+                     18, 19, 20, 21, 22, 23, 24, 25, 26,
                      27, 28, 29, 30, 31, 32, 34,
                      36, 37, 38, 40, 41, 43, 44, 45, 46, 49, 51,
                      52, 53, 54, 55, 56, 57, 58, 59,
-                     68, 69, 72, 74, 75, 76, 77, 78, 80, 81}
+                     68, 69, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82}
         rows: list[tuple[int, str, str]] = []
         for idx in sorted(builtin_calls):
             mark = "ok" if idx in installed else "MISSING"

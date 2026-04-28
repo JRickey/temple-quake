@@ -1308,6 +1308,66 @@ ASSERT_EQ(pr_last_builtin_called, 80, "PF_infokey_invoked");
 ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_infokey_returns_null_string");
 
 // ============================================================
+// Phase 6 Batch 7 — multiplayer messaging (#23, #24, #73, #79, #82)
+// ============================================================
+
+// #23 — bprint("Hello QC!") — broadcast (client = -1 sentinel)
+_t_fn[1].first_statement = -23;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_bprint");
+pr_globals[OFS_PARM0] = 7;
+pr_last_msg_str[0] = 0;
+pr_last_msg_client = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 23, "PF_bprint_invoked");
+ASSERT_EQ(Q_strcmp(pr_last_msg_str, "Hello QC!"), 0, "PF_bprint_payload");
+ASSERT_EQ(pr_last_msg_client, -1, "PF_bprint_broadcast_sentinel");
+
+// #24 — sprint(client=4, "Hello QC!")
+_t_fn[1].first_statement = -24;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_sprint");
+pr_globals[OFS_PARM0] = 4;
+pr_globals[OFS_PARM1] = 7;
+pr_last_msg_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 24, "PF_sprint_invoked");
+ASSERT_EQ(pr_last_msg_client, 4, "PF_sprint_client");
+ASSERT_EQ(Q_strcmp(pr_last_msg_str, "Hello QC!"), 0, "PF_sprint_payload");
+
+// #73 — centerprint(client=2, "Hello QC!")
+_t_fn[1].first_statement = -73;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_centerprint");
+pr_globals[OFS_PARM0] = 2;
+pr_globals[OFS_PARM1] = 7;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 73, "PF_centerprint_invoked");
+ASSERT_EQ(pr_last_msg_client, 2, "PF_centerprint_client");
+ASSERT_EQ(Q_strcmp(pr_last_msg_str, "Hello QC!"), 0, "PF_centerprint_payload");
+
+// #79 — logfrag(killer=5, victim=8)
+_t_fn[1].first_statement = -79;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_logfrag");
+pr_globals[OFS_PARM0] = 5;
+pr_globals[OFS_PARM1] = 8;
+pr_last_logfrag_killer = 0;
+pr_last_logfrag_victim = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 79, "PF_logfrag_invoked");
+ASSERT_EQ(pr_last_logfrag_killer, 5, "PF_logfrag_killer");
+ASSERT_EQ(pr_last_logfrag_victim, 8, "PF_logfrag_victim");
+
+// #82 — multicast(origin, sendto=3)
+_t_fn[1].first_statement = -82;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_multicast");
+_PR_SetFloat(OFS_PARM0,     0.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+_PR_SetFloat(OFS_PARM1,     3.0);
+pr_last_multicast_dest = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 82, "PF_multicast_invoked");
+ASSERT_EQ(pr_last_multicast_dest, 3, "PF_multicast_sendto");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================
