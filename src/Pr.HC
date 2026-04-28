@@ -43,6 +43,51 @@
 #define OFS_PARM7     25
 #define RESERVED_OFS  28
 
+// globalvars_t overlay — pr_globals[28..] match the layout of
+// pr_global_struct in Quake (see quake-src/WinQuake/progdefs.q1
+// lines 1-58). The first 28 slots are the OFS_NULL/RETURN/PARM*
+// reserved area; from slot 28 forward, the bytecode reads/writes
+// these named server globals through normal LOAD_*/STORE_* ops.
+// We expose the same offsets as constants so HolyC-side helpers
+// (and OP_STATE) can address them by name.
+#define OFS_GS_SELF             28        // entity
+#define OFS_GS_OTHER            29        // entity
+#define OFS_GS_WORLD            30        // entity
+#define OFS_GS_TIME             31        // float
+#define OFS_GS_FRAMETIME        32        // float
+#define OFS_GS_FORCE_RETOUCH    33        // float
+#define OFS_GS_MAPNAME          34        // string
+#define OFS_GS_DEATHMATCH       35        // float
+#define OFS_GS_COOP             36
+#define OFS_GS_TEAMPLAY         37
+#define OFS_GS_SERVERFLAGS      38
+#define OFS_GS_TOTAL_SECRETS    39
+#define OFS_GS_TOTAL_MONSTERS   40
+#define OFS_GS_FOUND_SECRETS    41
+#define OFS_GS_KILLED_MONSTERS  42
+// Slots 43..58: parm1..parm16 (16 floats — client info passed to
+// SetNewParms / SetChangeParms).
+#define OFS_GS_PARM1            43
+// Slots 59..67: v_forward, v_up, v_right (3 vec3 from makevectors).
+#define OFS_GS_V_FORWARD        59
+#define OFS_GS_V_UP             62
+#define OFS_GS_V_RIGHT          65
+// Slots 68..80: trace_* result block (set by traceline / etc.).
+#define OFS_GS_TRACE_ALLSOLID   68
+#define OFS_GS_TRACE_STARTSOLID 69
+#define OFS_GS_TRACE_FRACTION   70
+#define OFS_GS_TRACE_ENDPOS     71        // vec3
+#define OFS_GS_TRACE_PLANE_NORMAL 74      // vec3
+#define OFS_GS_TRACE_PLANE_DIST 77        // float
+#define OFS_GS_TRACE_ENT        78        // entity
+#define OFS_GS_TRACE_INOPEN     79
+#define OFS_GS_TRACE_INWATER    80
+#define OFS_GS_MSG_ENTITY       81        // entity
+// Slots 82..91: server callbacks (main, StartFrame, PlayerPreThink,
+// PlayerPostThink, ClientKill, ClientConnect, PutClientInServer,
+// ClientDisconnect, SetNewParms, SetChangeParms — all func_t).
+#define OFS_GS_MAIN             82
+
 // Type IDs from etype_t (pr_comp.h:26).
 #define EV_VOID      0
 #define EV_STRING    1
@@ -244,6 +289,12 @@ I64           pr_argc = 0;             // arg count for the current builtin call
 I64 pr_last_builtin_called = 0;
 U8  pr_last_builtin_arg0_str[256];
 
+// OP_STATE instrumentation: records the last (frame, think) operands
+// observed so tests can verify dispatch without a real server.
+Bool pr_last_op_state_called = FALSE;
+F64  pr_last_op_state_frame  = 0.0;
+I64  pr_last_op_state_think  = 0;
+
 // ============================================================
 // IEEE-754 F32 ↔ F64 conversion helpers
 // ============================================================
@@ -343,6 +394,30 @@ I64 _PR_FieldPointerFromEntity(I64 ent, I64 field_ofs) {
 
 I64 _PR_FieldSlotFromPointer(I64 ptr) {
   return ptr >> 2;
+}
+
+// atan2(y, x) — TempleOS's Math library only ships single-arg ATan,
+// so we compute the four-quadrant version ourselves. Returns radians
+// in (-π, π]. Used by vectoyaw / vectoangles to convert direction
+// vectors into Quake-format pitch/yaw.
+F64 _PR_atan2(F64 y, F64 x) {
+  if (x > 0.0) {
+    return ATan(y / x);
+  }
+  if (x < 0.0) {
+    if (y >= 0.0) {
+      return ATan(y / x) + pi;
+    }
+    return ATan(y / x) - pi;
+  }
+  // x == 0
+  if (y > 0.0) {
+    return pi / 2.0;
+  }
+  if (y < 0.0) {
+    return -pi / 2.0;
+  }
+  return 0.0;
 }
 
 // ============================================================
@@ -550,66 +625,57 @@ I64 _PR_LeaveFunction() {
 // index. Real Quake uses a function-pointer table; HolyC's array-
 // of-fn-pointers shape is fragile, and a switch ports cleaner.
 //
-// Builtin-index assignments mirror Quake's `pr_cmds.c` ordering
-// where overlap exists. Indices 1..N below are "installed"; calls
-// to other indices return PR_RunError-style.
+// Builtin indices now match Quake's canonical `pr_cmds.c` table
+// (e.g. random=#7, error=#10, vlen=#12, dprint=#25, ftos=#26),
+// so a real progs.dat compiled by qcc/fteqcc can be loaded and
+// dispatched. Stateless math/utility builtins are implemented;
+// server-side ones (setorigin, setmodel, spawn, sound, traceline,
+// etc.) are recordable stubs that preserve the dispatch path
+// without simulating the world.
 //
 // Param convention (Quake's): each parameter occupies 3 global
 // slots (room for vec3); param N is at OFS_PARM0 + N*3. String
 // parameters store an i32 offset into pr_strings in the FIRST
 // slot of their param trio.
 
-// Builtin index 1 — print(string s)
-U0 _PR_PF_print() {
-  I64 strofs = pr_globals[OFS_PARM0];
-  U8 *s = _PR_GetString(strofs);
-  Con_Printf(s);
-  // Test instrumentation.
-  pr_last_builtin_called = 1;
-  I64 i = 0;
-  while (i < 255 && s[i]) {
-    pr_last_builtin_arg0_str[i] = s[i];
-    i++;
-  }
-  pr_last_builtin_arg0_str[i] = 0;
+// #6 — break() — debugger breakpoint; no-op stub.
+U0 _PR_PF_break() {
+  pr_last_builtin_called = 6;
 }
 
-// Builtin index 2 — ftos(float f) → string
-U0 _PR_PF_ftos() {
-  F64 f = _PR_GetFloat(OFS_PARM0);
-  // ftos returns a string offset. We have no runtime string pool
-  // growth yet — write into a static scratch in pr_strings if it
-  // fits, else return offset 0.
-  static U8 ftos_buf[64];
-  // TempleOS's default `%f` rounds to integer (no fractional digits
-  // unless asked). Quake's ftos formats to 1 decimal for whole or
-  // small fractions and full precision otherwise — we approximate
-  // with `%5.6f` matching real Quake's `sprintf(s, "%5.1f", v)` for
-  // single-decimal output; tweak as call sites demand.
-  StrPrint(ftos_buf, "%5.1f", f);
-  // Return: offset is hacky for now — point OFS_RETURN at a
-  // SPECIAL string offset that resolves through ftos_buf instead
-  // of pr_strings. We bypass that by encoding `ftos_buf` directly:
-  // _PR_GetString detects out-of-range and falls back to "" today,
-  // so we return 0 here and stash the result in a side channel.
-  pr_globals[OFS_RETURN] = 0;
-  pr_last_builtin_called = 2;
-  I64 i = 0;
-  while (i < 255 && ftos_buf[i]) {
-    pr_last_builtin_arg0_str[i] = ftos_buf[i];
-    i++;
-  }
-  pr_last_builtin_arg0_str[i] = 0;
+// #7 — random() → float in [0, 1)
+U0 _PR_PF_random() {
+  _PR_SetFloat(OFS_RETURN, Rand);
+  pr_last_builtin_called = 7;
 }
 
-// Builtin index 3 — error(string s) — Sys_Error stub
+// #9 — normalize(vec3) → vec3 in OFS_RETURN
+U0 _PR_PF_normalize() {
+  F64 x = _PR_GetFloat(OFS_PARM0);
+  F64 y = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 z = _PR_GetFloat(OFS_PARM0 + 2);
+  F64 len_sq = x * x + y * y + z * z;
+  F64 len = Sqrt(len_sq);
+  if (len > 0.0) {
+    _PR_SetFloat(OFS_RETURN,     x / len);
+    _PR_SetFloat(OFS_RETURN + 1, y / len);
+    _PR_SetFloat(OFS_RETURN + 2, z / len);
+  } else {
+    _PR_SetFloat(OFS_RETURN,     0.0);
+    _PR_SetFloat(OFS_RETURN + 1, 0.0);
+    _PR_SetFloat(OFS_RETURN + 2, 0.0);
+  }
+  pr_last_builtin_called = 9;
+}
+
+// #10 — error(string s) — Sys_Error equivalent; halts the VM.
 U0 _PR_PF_error() {
   I64 strofs = pr_globals[OFS_PARM0];
   U8 *s = _PR_GetString(strofs);
   U8 errbuf[320];
   StrPrint(errbuf, "PR_PF_error: %s\n", s);
   Con_Printf(errbuf);
-  pr_last_builtin_called = 3;
+  pr_last_builtin_called = 10;
   I64 i = 0;
   while (i < 255 && s[i]) {
     pr_last_builtin_arg0_str[i] = s[i];
@@ -619,10 +685,172 @@ U0 _PR_PF_error() {
   pr_halted = TRUE;
 }
 
-// Builtin index 4 — random() → float in [0, 1)
-U0 _PR_PF_random() {
-  _PR_SetFloat(OFS_RETURN, Rand);
-  pr_last_builtin_called = 4;
+// #11 — objerror(string s) — like error but normally would clear
+// the offending entity. We treat it the same as error for now.
+U0 _PR_PF_objerror() {
+  _PR_PF_error();
+  pr_last_builtin_called = 11;
+}
+
+// #12 — vlen(vec3) → float in OFS_RETURN
+U0 _PR_PF_vlen() {
+  F64 x = _PR_GetFloat(OFS_PARM0);
+  F64 y = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 z = _PR_GetFloat(OFS_PARM0 + 2);
+  _PR_SetFloat(OFS_RETURN, Sqrt(x * x + y * y + z * z));
+  pr_last_builtin_called = 12;
+}
+
+// #13 — vectoyaw(vec3) → float (yaw in degrees)
+U0 _PR_PF_vectoyaw() {
+  F64 x = _PR_GetFloat(OFS_PARM0);
+  F64 y = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 yaw;
+  if (x == 0.0 && y == 0.0) {
+    yaw = 0.0;
+  } else {
+    yaw = _PR_atan2(y, x) * 180.0 / pi;
+    if (yaw < 0.0) {
+      yaw = yaw + 360.0;
+    }
+  }
+  _PR_SetFloat(OFS_RETURN, yaw);
+  pr_last_builtin_called = 13;
+}
+
+// #19 — precache_sound(string s) — no-op stub; record string.
+U0 _PR_PF_precache_sound() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  pr_globals[OFS_RETURN] = strofs;        // returns the same string
+  pr_last_builtin_called = 19;
+  I64 i = 0;
+  while (i < 255 && s[i]) {
+    pr_last_builtin_arg0_str[i] = s[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// #20 — precache_model(string s) — no-op stub; record string.
+U0 _PR_PF_precache_model() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  pr_globals[OFS_RETURN] = strofs;
+  pr_last_builtin_called = 20;
+  I64 i = 0;
+  while (i < 255 && s[i]) {
+    pr_last_builtin_arg0_str[i] = s[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// #25 — dprint(string s) — debug print; same path as console out.
+U0 _PR_PF_dprint() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  Con_Printf(s);
+  pr_last_builtin_called = 25;
+  I64 i = 0;
+  while (i < 255 && s[i]) {
+    pr_last_builtin_arg0_str[i] = s[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// #26 — ftos(float f) → string
+U0 _PR_PF_ftos() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  static U8 ftos_buf[64];
+  StrPrint(ftos_buf, "%5.1f", f);
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 26;
+  I64 i = 0;
+  while (i < 255 && ftos_buf[i]) {
+    pr_last_builtin_arg0_str[i] = ftos_buf[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// #36 — rint(float f) → float (round to nearest int)
+U0 _PR_PF_rint() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  F64 r;
+  if (f > 0.0) {
+    r = (f + 0.5)(I64);
+  } else {
+    r = (f - 0.5)(I64);
+  }
+  _PR_SetFloat(OFS_RETURN, r);
+  pr_last_builtin_called = 36;
+}
+
+// #37 — floor(float f) → float
+U0 _PR_PF_floor() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  I64 trunc = f(I64);
+  // C-style truncation rounds toward zero; floor rounds toward
+  // -inf. Adjust for negative non-integers.
+  if (f < 0.0 && trunc(F64) != f) {
+    trunc = trunc - 1;
+  }
+  _PR_SetFloat(OFS_RETURN, trunc(F64));
+  pr_last_builtin_called = 37;
+}
+
+// #38 — ceil(float f) → float
+U0 _PR_PF_ceil() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  I64 trunc = f(I64);
+  if (f > 0.0 && trunc(F64) != f) {
+    trunc = trunc + 1;
+  }
+  _PR_SetFloat(OFS_RETURN, trunc(F64));
+  pr_last_builtin_called = 38;
+}
+
+// #43 — fabs(float f) → float
+U0 _PR_PF_fabs() {
+  F64 f = _PR_GetFloat(OFS_PARM0);
+  if (f < 0.0) {
+    f = -f;
+  }
+  _PR_SetFloat(OFS_RETURN, f);
+  pr_last_builtin_called = 43;
+}
+
+// #51 — vectoangles(vec3) → vec3 (pitch, yaw, 0)
+U0 _PR_PF_vectoangles() {
+  F64 x = _PR_GetFloat(OFS_PARM0);
+  F64 y = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 z = _PR_GetFloat(OFS_PARM0 + 2);
+  F64 yaw;
+  F64 pitch;
+  if (x == 0.0 && y == 0.0) {
+    yaw = 0.0;
+    if (z > 0.0) {
+      pitch = 90.0;
+    } else {
+      pitch = 270.0;
+    }
+  } else {
+    yaw = _PR_atan2(y, x) * 180.0 / pi;
+    if (yaw < 0.0) {
+      yaw = yaw + 360.0;
+    }
+    F64 forward = Sqrt(x * x + y * y);
+    pitch = _PR_atan2(z, forward) * 180.0 / pi;
+    if (pitch < 0.0) {
+      pitch = pitch + 360.0;
+    }
+  }
+  _PR_SetFloat(OFS_RETURN,     pitch);
+  _PR_SetFloat(OFS_RETURN + 1, yaw);
+  _PR_SetFloat(OFS_RETURN + 2, 0.0);
+  pr_last_builtin_called = 51;
 }
 
 // Builtin dispatch — invoked when a function call hits a
@@ -630,18 +858,22 @@ U0 _PR_PF_random() {
 // builtin index.
 U0 _PR_DispatchBuiltin(I64 idx) {
   switch (idx) {
-    case 1:
-      _PR_PF_print();
-      break;
-    case 2:
-      _PR_PF_ftos();
-      break;
-    case 3:
-      _PR_PF_error();
-      break;
-    case 4:
-      _PR_PF_random();
-      break;
+    case  6: _PR_PF_break();           break;
+    case  7: _PR_PF_random();          break;
+    case  9: _PR_PF_normalize();       break;
+    case 10: _PR_PF_error();           break;
+    case 11: _PR_PF_objerror();        break;
+    case 12: _PR_PF_vlen();            break;
+    case 13: _PR_PF_vectoyaw();        break;
+    case 19: _PR_PF_precache_sound();  break;
+    case 20: _PR_PF_precache_model();  break;
+    case 25: _PR_PF_dprint();          break;
+    case 26: _PR_PF_ftos();            break;
+    case 36: _PR_PF_rint();            break;
+    case 37: _PR_PF_floor();           break;
+    case 38: _PR_PF_ceil();            break;
+    case 43: _PR_PF_fabs();            break;
+    case 51: _PR_PF_vectoangles();     break;
     default:
       Print("PR: builtin #%d not installed\n", idx);
       pr_halted = TRUE;
@@ -939,6 +1171,20 @@ U0 PR_ExecuteProgram(I64 fnum) {
           pr_halted = TRUE;
         }
         break;
+      // ---- OP_STATE — animation think-state setter ----
+      // Real Quake reads pr_global_struct->self, writes
+      // self->frame = a, self->nextthink = time + 0.05,
+      // self->think = b — needs the field-offset table parsed from
+      // the progs's ddef_t entries, which we don't yet do. For
+      // Phase 5 we record the operands so tests can verify dispatch
+      // and the step counter advances; the side effect on the edict
+      // is deferred until we wire up symbolic field lookup.
+      case OP_STATE:
+        pr_last_op_state_called = TRUE;
+        pr_last_op_state_frame  = _PR_GetFloat(a);
+        pr_last_op_state_think  = pr_globals[b];
+        break;
+
       case OP_DONE:
         pr_xstatement = _PR_LeaveFunction();
         if (_pr_depth == exit_depth) {

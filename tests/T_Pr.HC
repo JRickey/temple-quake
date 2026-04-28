@@ -274,7 +274,7 @@ ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_after_fix")
 //
 // We rebuild the synthetic progs.dat with three functions:
 //   fn[0] — sentinel ("function 0 is empty" per Quake convention)
-//   fn[1] — print, builtin #1 (first_statement = -1)
+//   fn[1] — dprint, builtin #25 (first_statement = -25)
 //   fn[2] — entry, calls print with OFS_PARM0 = string offset
 //
 // Parameters: OFS_PARM0 holds the string offset into pr_strings.
@@ -304,7 +304,7 @@ _t_fn[0].locals          = 0;
 _t_fn[0].s_name          = 0;
 _t_fn[0].numparms        = 0;
 // fn[1] — print, builtin #1
-_t_fn[1].first_statement = -1;
+_t_fn[1].first_statement = -25;                // dprint
 _t_fn[1].parm_start      = 0;
 _t_fn[1].locals          = 0;
 _t_fn[1].s_name          = 0;
@@ -338,17 +338,17 @@ pr_globals[OFS_PARM0] = 7;                   // string offset of "Hello QC!"
 pr_last_builtin_called = 0;
 pr_last_builtin_arg0_str[0] = 0;
 PR_ExecuteProgram(2);
-ASSERT_EQ(pr_last_builtin_called, 1, "PF_print_invoked");
+ASSERT_EQ(pr_last_builtin_called, 25, "PF_dprint_invoked");
 ASSERT_EQ(Q_strcmp(pr_last_builtin_arg0_str, "Hello QC!"), 0, "PF_print_received_arg");
 
 // ---- ftos: float → string in side channel ----
-_t_fn[1].first_statement = -2;               // re-target fn[1] to builtin #2
+_t_fn[1].first_statement = -26;              // re-target fn[1] to ftos (#26)
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_ftos");
 _PR_SetFloat(OFS_PARM0, 3.5);
 pr_last_builtin_called = 0;
 pr_last_builtin_arg0_str[0] = 0;
 PR_ExecuteProgram(2);
-ASSERT_EQ(pr_last_builtin_called, 2, "PF_ftos_invoked");
+ASSERT_EQ(pr_last_builtin_called, 26, "PF_ftos_invoked");
 // PF_ftos uses StrPrint with explicit "%5.1f" precision. The
 // resulting string contains "3.5" somewhere (possibly with leading
 // space-padding from the field width). Find a '3' followed
@@ -369,22 +369,22 @@ for (_t_idx = 0; _t_idx < 60; _t_idx++) {
 ASSERT_EQ(_t_found_three_point_five == TRUE, 1, "PF_ftos_contains_3.5");
 
 // ---- error: halts the VM ----
-_t_fn[1].first_statement = -3;
+_t_fn[1].first_statement = -10;              // error (#10)
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_error");
 pr_globals[OFS_PARM0] = 7;                   // "Hello QC!" reused as fake error
 pr_last_builtin_called = 0;
 pr_halted = FALSE;
 PR_ExecuteProgram(2);
-ASSERT_EQ(pr_last_builtin_called, 3, "PF_error_invoked");
+ASSERT_EQ(pr_last_builtin_called, 10, "PF_error_invoked");
 ASSERT_EQ(pr_halted == TRUE, 1, "PF_error_halts_vm");
 
 // ---- random: returns a float in [0, 1) ----
-_t_fn[1].first_statement = -4;
+_t_fn[1].first_statement = -7;               // random (#7)
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_random");
 _PR_SetFloat(OFS_RETURN, -1.0);
 pr_last_builtin_called = 0;
 PR_ExecuteProgram(2);
-ASSERT_EQ(pr_last_builtin_called, 4, "PF_random_invoked");
+ASSERT_EQ(pr_last_builtin_called, 7, "PF_random_invoked");
 F64 _t_r = _PR_GetFloat(OFS_RETURN);
 ASSERT_EQ(_t_r >= 0.0 && _t_r < 1.0, 1, "PF_random_in_unit_interval");
 
@@ -712,5 +712,147 @@ ASSERT_EQ(pr_numglobals,  64, "load_from_file_numglobals");
 // Bad path → returns FALSE without crashing.
 ASSERT_EQ(PR_LoadProgsFromFile("::/Tmp/no_such_file.dat") == FALSE, 1,
           "load_from_file_missing_returns_false");
+
+// ============================================================
+// OP_STATE — animation think-state setter (recordable stub)
+// ============================================================
+// We don't yet parse fielddefs to resolve symbolic field offsets,
+// so OP_STATE just records its operands for tests to verify.
+
+pr_last_op_state_called = FALSE;
+pr_last_op_state_frame  = 0.0;
+pr_last_op_state_think  = 0;
+
+_PR_SetFloat(40, 13.0);                          // frame
+pr_globals[41] = 7;                              // think function index
+_t_st[1].op = OP_STATE; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 0;
+_t_st[2].op = OP_DONE;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_op_state_called == TRUE, 1, "OP_STATE_called");
+ASSERT_NEAR(pr_last_op_state_frame, 13.0, 0.0001, "OP_STATE_frame");
+ASSERT_EQ(pr_last_op_state_think, 7, "OP_STATE_think");
+
+// ============================================================
+// Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
+// #43, #51) and stub recorders (#6, #19, #20).
+// ============================================================
+//
+// Pattern: re-target fn[1] to the builtin under test, set up
+// OFS_PARM0..n, run, assert OFS_RETURN + side channels.
+
+// #6 — break — no-op stub.
+_t_fn[1].first_statement = -6;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_break");
+pr_last_builtin_called = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 6, "PF_break_invoked");
+
+// #9 — normalize((3,0,0)) → (1,0,0)
+_t_fn[1].first_statement = -9;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_normalize");
+_PR_SetFloat(OFS_PARM0,     3.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 9, "PF_normalize_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),     1.0, 0.0001, "PF_normalize_x");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN + 1), 0.0, 0.0001, "PF_normalize_y");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN + 2), 0.0, 0.0001, "PF_normalize_z");
+// Zero vector → zero result (no NaN).
+_PR_SetFloat(OFS_PARM0,     0.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),     0.0, 0.0001, "PF_normalize_zero_x");
+
+// #12 — vlen((3,4,0)) = 5
+_t_fn[1].first_statement = -12;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_vlen");
+_PR_SetFloat(OFS_PARM0,     3.0);
+_PR_SetFloat(OFS_PARM0 + 1, 4.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 12, "PF_vlen_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 5.0, 0.0001, "PF_vlen_345");
+
+// #13 — vectoyaw((1,0,0)) = 0
+_t_fn[1].first_statement = -13;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_vectoyaw");
+_PR_SetFloat(OFS_PARM0,     1.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 0.0, 0.5, "PF_vectoyaw_east");
+// (0,1,0) → 90 degrees
+_PR_SetFloat(OFS_PARM0,     0.0);
+_PR_SetFloat(OFS_PARM0 + 1, 1.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 90.0, 0.5, "PF_vectoyaw_north");
+
+// #19 — precache_sound — recordable stub
+_t_fn[1].first_statement = -19;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_sound");
+pr_globals[OFS_PARM0] = 7;                       // "Hello QC!" reused
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 19, "PF_precache_sound_invoked");
+
+// #20 — precache_model — recordable stub
+_t_fn[1].first_statement = -20;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_model");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 20, "PF_precache_model_invoked");
+
+// #36 — rint(2.7) = 3
+_t_fn[1].first_statement = -36;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_rint");
+_PR_SetFloat(OFS_PARM0, 2.7);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 3.0, 0.0001, "PF_rint_2.7");
+_PR_SetFloat(OFS_PARM0, -2.7);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), -3.0, 0.0001, "PF_rint_neg_2.7");
+
+// #37 — floor
+_t_fn[1].first_statement = -37;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_floor");
+_PR_SetFloat(OFS_PARM0, 2.9);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),  2.0, 0.0001, "PF_floor_2.9");
+_PR_SetFloat(OFS_PARM0, -2.1);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), -3.0, 0.0001, "PF_floor_neg_2.1");
+
+// #38 — ceil
+_t_fn[1].first_statement = -38;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_ceil");
+_PR_SetFloat(OFS_PARM0, 2.1);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),  3.0, 0.0001, "PF_ceil_2.1");
+_PR_SetFloat(OFS_PARM0, -2.9);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), -2.0, 0.0001, "PF_ceil_neg_2.9");
+
+// #43 — fabs
+_t_fn[1].first_statement = -43;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_fabs");
+_PR_SetFloat(OFS_PARM0, -7.5);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 7.5, 0.0001, "PF_fabs_negative");
+
+// #51 — vectoangles((1,0,0)) → (0, 0, 0)
+_t_fn[1].first_statement = -51;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_vectoangles");
+_PR_SetFloat(OFS_PARM0,     1.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),     0.0, 0.5, "PF_vectoangles_east_pitch");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN + 1), 0.0, 0.5, "PF_vectoangles_east_yaw");
+// Straight up (0,0,1) → pitch=90, yaw=0
+_PR_SetFloat(OFS_PARM0,     0.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 1.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 90.0, 0.5, "PF_vectoangles_up_pitch");
 
 TEST_SUMMARY;

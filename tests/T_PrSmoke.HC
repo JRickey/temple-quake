@@ -61,7 +61,7 @@ dfunction_t *_smoke_fn = _smoke_progs + _smoke_hdr->ofs_functions;
 _smoke_fn[0].first_statement = 0;
 _smoke_fn[0].s_name          = 0;
 // print: builtin #1
-_smoke_fn[1].first_statement = -1;
+_smoke_fn[1].first_statement = -25;            // dprint (#25)
 _smoke_fn[1].parm_start      = 0;
 _smoke_fn[1].locals          = 0;
 _smoke_fn[1].s_name          = 0;
@@ -107,7 +107,7 @@ PR_ExecuteProgram(2);
 ASSERT_NEAR(_PR_GetFloat(46), 5.0, 0.0001, "smoke.add_v_x");
 ASSERT_NEAR(_PR_GetFloat(47), 7.0, 0.0001, "smoke.add_v_y");
 ASSERT_NEAR(_PR_GetFloat(48), 9.0, 0.0001, "smoke.add_v_z");
-ASSERT_EQ(pr_last_builtin_called, 1, "smoke.print_invoked");
+ASSERT_EQ(pr_last_builtin_called, 25, "smoke.print_invoked");
 ASSERT_EQ(Q_strcmp(pr_last_builtin_arg0_str, "ok"), 0,
           "smoke.print_received_ok");
 ASSERT_EQ(pr_halted == TRUE, 1, "smoke.exec_halted_cleanly");
