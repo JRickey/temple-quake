@@ -295,6 +295,13 @@ Bool pr_last_op_state_called = FALSE;
 F64  pr_last_op_state_frame  = 0.0;
 I64  pr_last_op_state_think  = 0;
 
+// Spawn / Remove instrumentation. Real Quake links / unlinks edicts
+// from the server's free-edict list. We model just enough to give
+// each spawn a unique entity index past entity 0 (world).
+I64 pr_next_free_edict = 1;                       // grows with each spawn
+I64 pr_last_spawned    = 0;
+I64 pr_last_removed    = 0;
+
 // Network-message Write* instrumentation. Real Quake routes Write*
 // builtins into one of several msg buffers (sv.datagram,
 // sv.reliable_datagram, sv.signon, sv.multicast). We don't have a
@@ -1133,12 +1140,126 @@ U0 _PR_PF_WriteEntity() {
   pr_last_builtin_called = 59;
 }
 
+// ============================================================
+// Phase 6 Batch 4 — server state mutators (#2/#3/#4, #14/#15,
+// #69/#74/#78)
+// ============================================================
+//
+// Setorigin / setmodel / setsize write into an entity's field
+// block via symbolic field lookup; spawn allocates a fresh edict
+// index; remove records the index. Real Quake also links the
+// entity into the BSP collision tree, plays sounds, etc. — those
+// behaviors are server-side and out of scope for the VM.
+
+// #2 — setorigin(entity, vec3) — write into the entity's origin
+// field (first 3 slots of "origin" by name lookup, fall back to
+// fielddef-free no-op when the layout has no origin).
+U0 _PR_PF_setorigin() {
+  I64 ent = pr_globals[OFS_PARM0];
+  I64 ofs = _PR_FieldOfsByName("origin");
+  if (ofs >= 0) {
+    I64 base = _PR_EdictFieldSlot(ent, ofs);
+    pr_edicts[base]     = pr_globals[OFS_PARM1];
+    pr_edicts[base + 1] = pr_globals[OFS_PARM1 + 1];
+    pr_edicts[base + 2] = pr_globals[OFS_PARM1 + 2];
+  }
+  pr_last_builtin_called = 2;
+}
+
+// #3 — setmodel(entity, string) — write the string offset into
+// the entity's "model" field. Real Quake also resolves the model,
+// loads collision hulls, etc.
+U0 _PR_PF_setmodel() {
+  I64 ent = pr_globals[OFS_PARM0];
+  I64 ofs = _PR_FieldOfsByName("model");
+  if (ofs >= 0) {
+    pr_edicts[_PR_EdictFieldSlot(ent, ofs)] = pr_globals[OFS_PARM1];
+  }
+  pr_last_builtin_called = 3;
+}
+
+// #4 — setsize(entity, vec3 mins, vec3 maxs) — write mins/maxs
+// fields and recompute size as (maxs - mins).
+U0 _PR_PF_setsize() {
+  I64 ent  = pr_globals[OFS_PARM0];
+  I64 omn  = _PR_FieldOfsByName("mins");
+  I64 omx  = _PR_FieldOfsByName("maxs");
+  I64 osz  = _PR_FieldOfsByName("size");
+  if (omn >= 0) {
+    I64 b = _PR_EdictFieldSlot(ent, omn);
+    pr_edicts[b]     = pr_globals[OFS_PARM1];
+    pr_edicts[b + 1] = pr_globals[OFS_PARM1 + 1];
+    pr_edicts[b + 2] = pr_globals[OFS_PARM1 + 2];
+  }
+  if (omx >= 0) {
+    I64 b = _PR_EdictFieldSlot(ent, omx);
+    pr_edicts[b]     = pr_globals[OFS_PARM2];
+    pr_edicts[b + 1] = pr_globals[OFS_PARM2 + 1];
+    pr_edicts[b + 2] = pr_globals[OFS_PARM2 + 2];
+  }
+  if (osz >= 0) {
+    F64 mnx = _PR_GetFloat(OFS_PARM1);
+    F64 mny = _PR_GetFloat(OFS_PARM1 + 1);
+    F64 mnz = _PR_GetFloat(OFS_PARM1 + 2);
+    F64 mxx = _PR_GetFloat(OFS_PARM2);
+    F64 mxy = _PR_GetFloat(OFS_PARM2 + 1);
+    F64 mxz = _PR_GetFloat(OFS_PARM2 + 2);
+    I64 b = _PR_EdictFieldSlot(ent, osz);
+    pr_edicts[b]     = _PR_F64_to_F32(mxx - mnx);
+    pr_edicts[b + 1] = _PR_F64_to_F32(mxy - mny);
+    pr_edicts[b + 2] = _PR_F64_to_F32(mxz - mnz);
+  }
+  pr_last_builtin_called = 4;
+}
+
+// #14 — spawn() → entity. Allocate a fresh edict index. Real
+// Quake reuses freed slots; we just advance a monotonic counter
+// for simplicity (capped at MAX_EDICTS).
+U0 _PR_PF_spawn() {
+  if (pr_next_free_edict >= MAX_EDICTS) {
+    pr_globals[OFS_RETURN] = 0;                   // world (fail)
+  } else {
+    pr_globals[OFS_RETURN] = pr_next_free_edict;
+    pr_last_spawned = pr_next_free_edict;
+    pr_next_free_edict++;
+  }
+  pr_last_builtin_called = 14;
+}
+
+// #15 — remove(entity) — record the freed entity index. Real
+// Quake clears the edict and adds it to the free list.
+U0 _PR_PF_remove() {
+  pr_last_removed = pr_globals[OFS_PARM0];
+  pr_last_builtin_called = 15;
+}
+
+// #69 — makestatic(entity) — broadcasts a baseline-only entity
+// (decorations). Stub records dispatch.
+U0 _PR_PF_makestatic() {
+  pr_last_builtin_called = 69;
+}
+
+// #74 — ambientsound(origin, sample, vol, attenuation) — adds an
+// ambient sound to the level. Stub records dispatch.
+U0 _PR_PF_ambientsound() {
+  pr_last_builtin_called = 74;
+}
+
+// #78 — setspawnparms(client) — copies serverflags into the
+// client's parm1..parm16 globals. Stub records dispatch.
+U0 _PR_PF_setspawnparms() {
+  pr_last_builtin_called = 78;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
 U0 _PR_DispatchBuiltin(I64 idx) {
   switch (idx) {
     case  1: _PR_PF_makevectors();       break;
+    case  2: _PR_PF_setorigin();         break;
+    case  3: _PR_PF_setmodel();          break;
+    case  4: _PR_PF_setsize();           break;
     case  6: _PR_PF_break();             break;
     case  7: _PR_PF_random();            break;
     case  9: _PR_PF_normalize();         break;
@@ -1146,6 +1267,8 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 11: _PR_PF_objerror();          break;
     case 12: _PR_PF_vlen();              break;
     case 13: _PR_PF_vectoyaw();          break;
+    case 14: _PR_PF_spawn();             break;
+    case 15: _PR_PF_remove();            break;
     case 18: _PR_PF_find();              break;
     case 19: _PR_PF_precache_sound();    break;
     case 20: _PR_PF_precache_model();    break;
@@ -1173,9 +1296,12 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 58: _PR_PF_WriteString();       break;
     case 59: _PR_PF_WriteEntity();       break;
     case 68: _PR_PF_precache_file();     break;
+    case 69: _PR_PF_makestatic();        break;
+    case 74: _PR_PF_ambientsound();      break;
     case 75: _PR_PF_precache_model2();   break;
     case 76: _PR_PF_precache_sound2();   break;
     case 77: _PR_PF_precache_file2();    break;
+    case 78: _PR_PF_setspawnparms();     break;
     case 81: _PR_PF_stof();              break;
     default:
       Print("PR: builtin #%d not installed\n", idx);

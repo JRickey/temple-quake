@@ -106,13 +106,13 @@ def main(argv: list[str]) -> int:
         # The set installed in src/Pr.HC's _PR_DispatchBuiltin. Keep
         # in sync — this is a pre-flight checklist, the live VM is
         # the source of truth.
-        installed = {1,
-                     6, 7, 9, 10, 11, 12, 13,
+        installed = {1, 2, 3, 4,
+                     6, 7, 9, 10, 11, 12, 13, 14, 15,
                      18, 19, 20, 22, 25, 26,
                      27, 28, 29, 30, 31,
                      36, 37, 38, 43, 44, 49, 51,
                      52, 53, 54, 55, 56, 57, 58, 59,
-                     68, 75, 76, 77, 81}
+                     68, 69, 74, 75, 76, 77, 78, 81}
         rows: list[tuple[int, str, str]] = []
         for idx in sorted(builtin_calls):
             mark = "ok" if idx in installed else "MISSING"

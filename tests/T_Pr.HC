@@ -1114,6 +1114,80 @@ ASSERT_EQ(pr_last_builtin_called, 59, "PF_WriteEntity_invoked");
 ASSERT_EQ(pr_last_write_val_i, 5, "PF_WriteEntity_val");
 
 // ============================================================
+// Phase 6 Batch 4 — server state mutators (#2-4, #14-15, #69/#74/#78)
+// ============================================================
+// Without an "origin"/"model"/"mins"/"maxs"/"size" fielddef in the
+// main fixture (numfielddefs=0), setorigin/setmodel/setsize fall
+// through their no-op safety arms — tests just verify dispatch.
+// spawn/remove have observable side channels.
+
+// #2 — setorigin: dispatch + no-op (no origin fielddef)
+_t_fn[1].first_statement = -2;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_setorigin");
+pr_globals[OFS_PARM0] = 5;                        // entity 5
+_PR_SetFloat(OFS_PARM1,     1.0);
+_PR_SetFloat(OFS_PARM1 + 1, 2.0);
+_PR_SetFloat(OFS_PARM1 + 2, 3.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 2, "PF_setorigin_invoked");
+
+// #3 — setmodel: dispatch + no-op
+_t_fn[1].first_statement = -3;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_setmodel");
+pr_globals[OFS_PARM0] = 5;
+pr_globals[OFS_PARM1] = 7;                        // string offset
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 3, "PF_setmodel_invoked");
+
+// #4 — setsize: dispatch + no-op
+_t_fn[1].first_statement = -4;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_setsize");
+pr_globals[OFS_PARM0] = 5;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 4, "PF_setsize_invoked");
+
+// #14 — spawn — allocates a fresh edict index from pr_next_free_edict
+_t_fn[1].first_statement = -14;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_spawn");
+pr_next_free_edict = 5;
+pr_globals[OFS_RETURN] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 14, "PF_spawn_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 5, "PF_spawn_returns_index");
+ASSERT_EQ(pr_last_spawned, 5, "PF_spawn_records_index");
+ASSERT_EQ(pr_next_free_edict, 6, "PF_spawn_advances_counter");
+// Second spawn → 6
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[OFS_RETURN], 6, "PF_spawn_returns_next");
+
+// #15 — remove(entity 9)
+_t_fn[1].first_statement = -15;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_remove");
+pr_globals[OFS_PARM0] = 9;
+pr_last_removed = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 15, "PF_remove_invoked");
+ASSERT_EQ(pr_last_removed, 9, "PF_remove_records_index");
+
+// #69 — makestatic
+_t_fn[1].first_statement = -69;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_makestatic");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 69, "PF_makestatic_invoked");
+
+// #74 — ambientsound
+_t_fn[1].first_statement = -74;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_ambientsound");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 74, "PF_ambientsound_invoked");
+
+// #78 — setspawnparms
+_t_fn[1].first_statement = -78;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_setspawnparms");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 78, "PF_setspawnparms_invoked");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================
