@@ -950,6 +950,78 @@ PR_ExecuteProgram(2);
 ASSERT_EQ(pr_last_builtin_called, 81, "PF_stof_invoked");
 
 // ============================================================
+// Phase 6 Batch 2 builtins (#1 makevectors, #18/#22 entity scan,
+// #44 aim, #49 ChangeYaw)
+// ============================================================
+
+// #1 — makevectors((0, 0, 0)) → forward=(1,0,0), right=(0,-1,0), up=(0,0,1)
+_t_fn[1].first_statement = -1;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_makevectors");
+_PR_SetFloat(OFS_PARM0,     0.0);                  // pitch
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);                  // yaw
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);                  // roll
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 1, "PF_makevectors_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_FORWARD),     1.0, 0.0001, "PF_makevectors_forward_x");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_FORWARD + 1), 0.0, 0.0001, "PF_makevectors_forward_y");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_FORWARD + 2), 0.0, 0.0001, "PF_makevectors_forward_z");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_UP + 2),      1.0, 0.0001, "PF_makevectors_up_z");
+// yaw = 90 → forward = (0, 1, 0)
+_PR_SetFloat(OFS_PARM0 + 1, 90.0);
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_FORWARD),     0.0, 0.0001, "PF_makevectors_yaw90_fx");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_V_FORWARD + 1), 1.0, 0.0001, "PF_makevectors_yaw90_fy");
+
+// #18 — find: scan edicts for a matching field. Set up entity 5
+// with field-0 = 99; ask find to scan from start=0 looking for
+// field-0 == 99.
+_t_fn[1].first_statement = -18;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_find");
+// pr_entityfields was last set to 8 by entity-ops tests. After
+// reload it's whatever this fixture's header says — main fixture
+// has entityfields=0. We need at least 1 field to test find;
+// patch the header value temporarily.
+pr_entityfields = 8;                                // hack — bypass header for this test
+pr_edicts[5 * 8 + 0] = 99;
+pr_globals[OFS_PARM0] = 0;                         // start_ent = 0
+pr_globals[OFS_PARM1] = 0;                         // field offset = 0
+pr_globals[OFS_PARM2] = 99;                        // value to match
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 18, "PF_find_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 5, "PF_find_returns_entity_5");
+// No match → returns 0 (world).
+pr_globals[OFS_PARM2] = 999;                       // not present
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_find_no_match_returns_0");
+pr_edicts[5 * 8 + 0] = 0;                          // cleanup
+
+// #22 — findradius — recordable stub, returns 0
+_t_fn[1].first_statement = -22;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_findradius");
+pr_globals[OFS_RETURN] = 1234;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 22, "PF_findradius_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_findradius_returns_world");
+
+// #44 — aim — returns v_forward
+_t_fn[1].first_statement = -44;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_aim");
+_PR_SetFloat(OFS_GS_V_FORWARD,     0.5);
+_PR_SetFloat(OFS_GS_V_FORWARD + 1, 0.6);
+_PR_SetFloat(OFS_GS_V_FORWARD + 2, 0.7);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 44, "PF_aim_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN),     0.5, 0.0001, "PF_aim_returns_forward_x");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN + 1), 0.6, 0.0001, "PF_aim_returns_forward_y");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN + 2), 0.7, 0.0001, "PF_aim_returns_forward_z");
+
+// #49 — ChangeYaw — recordable stub
+_t_fn[1].first_statement = -49;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_ChangeYaw");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 49, "PF_ChangeYaw_invoked");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================

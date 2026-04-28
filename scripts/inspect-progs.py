@@ -106,9 +106,11 @@ def main(argv: list[str]) -> int:
         # The set installed in src/Pr.HC's _PR_DispatchBuiltin. Keep
         # in sync — this is a pre-flight checklist, the live VM is
         # the source of truth.
-        installed = {6, 7, 9, 10, 11, 12, 13, 19, 20, 25, 26,
+        installed = {1,
+                     6, 7, 9, 10, 11, 12, 13,
+                     18, 19, 20, 22, 25, 26,
                      27, 28, 29, 30, 31,
-                     36, 37, 38, 43, 51,
+                     36, 37, 38, 43, 44, 49, 51,
                      68, 75, 76, 77, 81}
         rows: list[tuple[int, str, str]] = []
         for idx in sorted(builtin_calls):

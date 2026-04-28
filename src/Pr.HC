@@ -945,6 +945,93 @@ U0 _PR_PF_precache_file2() {
   pr_last_builtin_called = 77;
 }
 
+// ============================================================
+// Phase 6 Batch 2 — math + entity-scan stubs.
+// ============================================================
+// #1 (makevectors) is the only real-math one — writes the
+// v_forward / v_up / v_right vec3s into the globalvars_t overlay
+// slots from a pitch/yaw/roll input. The rest (#18 find,
+// #22 findradius, #44 aim, #49 ChangeYaw) need a real Quake
+// server context; they ship as recordable stubs that return
+// sensible defaults (world entity / zero vec) so dispatch routes.
+
+// #1 — makevectors(vec3 angles) — angles[0]=pitch, [1]=yaw, [2]=roll
+// in degrees. Writes the standard right-handed orthonormal basis
+// to v_forward / v_up / v_right. Mirror of WinQuake's
+// AngleVectors() in mathlib.c.
+U0 _PR_PF_makevectors() {
+  F64 pitch_deg = _PR_GetFloat(OFS_PARM0);
+  F64 yaw_deg   = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 roll_deg  = _PR_GetFloat(OFS_PARM0 + 2);
+  F64 deg2rad   = pi * 2.0 / 360.0;
+  F64 sp = Sin(pitch_deg * deg2rad); F64 cp = Cos(pitch_deg * deg2rad);
+  F64 sy = Sin(yaw_deg   * deg2rad); F64 cy = Cos(yaw_deg   * deg2rad);
+  F64 sr = Sin(roll_deg  * deg2rad); F64 cr = Cos(roll_deg  * deg2rad);
+
+  // forward = (cp*cy, cp*sy, -sp)
+  _PR_SetFloat(OFS_GS_V_FORWARD,     cp * cy);
+  _PR_SetFloat(OFS_GS_V_FORWARD + 1, cp * sy);
+  _PR_SetFloat(OFS_GS_V_FORWARD + 2, -sp);
+  // right = (-sr*sp*cy + cr*sy, -sr*sp*sy + -cr*cy, -sr*cp)
+  _PR_SetFloat(OFS_GS_V_RIGHT,     -sr * sp * cy + cr * sy);
+  _PR_SetFloat(OFS_GS_V_RIGHT + 1, -sr * sp * sy - cr * cy);
+  _PR_SetFloat(OFS_GS_V_RIGHT + 2, -sr * cp);
+  // up = (cr*sp*cy + sr*sy, cr*sp*sy - sr*cy, cr*cp)
+  _PR_SetFloat(OFS_GS_V_UP,     cr * sp * cy + sr * sy);
+  _PR_SetFloat(OFS_GS_V_UP + 1, cr * sp * sy - sr * cy);
+  _PR_SetFloat(OFS_GS_V_UP + 2, cr * cp);
+  pr_last_builtin_called = 1;
+}
+
+// #18 — find(start_entity, .field, value) → entity. Walks the edict
+// pool starting from start+1 looking for an entity whose `.field`
+// equals `value`. Returns 0 (the world entity) if none found.
+// `.field` is passed as a field offset (slot units) in OFS_PARM1.
+// `value` is the comparison target in OFS_PARM2 — for string
+// fields this is a string offset.
+U0 _PR_PF_find() {
+  I64 start_ent = pr_globals[OFS_PARM0];
+  I64 fld_ofs   = pr_globals[OFS_PARM1];
+  I32 needle    = pr_globals[OFS_PARM2];
+  I64 ent;
+  for (ent = start_ent + 1; ent < pr_max_edicts; ent++) {
+    if (pr_edicts[_PR_EdictFieldSlot(ent, fld_ofs)] == needle) {
+      pr_globals[OFS_RETURN] = ent;
+      pr_last_builtin_called = 18;
+      return;
+    }
+  }
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 18;
+}
+
+// #22 — findradius(origin, radius) → entity. Returns the head of
+// a linked list of entities within `radius` of `origin`. Real Quake
+// chains them via the `chain` field. We don't yet model chain
+// linking; return 0 (world) and record the call.
+U0 _PR_PF_findradius() {
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 22;
+}
+
+// #44 — aim(entity, missile_speed) → vec3 forward. Used for
+// auto-aim assistance in Quake. We return v_forward verbatim so
+// the caller gets a sensible direction; full aim-cone logic
+// requires traceline.
+U0 _PR_PF_aim() {
+  _PR_SetFloat(OFS_RETURN,     _PR_GetFloat(OFS_GS_V_FORWARD));
+  _PR_SetFloat(OFS_RETURN + 1, _PR_GetFloat(OFS_GS_V_FORWARD + 1));
+  _PR_SetFloat(OFS_RETURN + 2, _PR_GetFloat(OFS_GS_V_FORWARD + 2));
+  pr_last_builtin_called = 44;
+}
+
+// #49 — ChangeYaw() — rotate self.angles[YAW] toward
+// self.ideal_yaw at self.yaw_speed. Needs server-side per-frame
+// state; record dispatch and leave self untouched.
+U0 _PR_PF_ChangeYaw() {
+  pr_last_builtin_called = 49;
+}
+
 // #81 — stof(string) → float. Parse a numeric string into F64.
 // Q_atof exists in Bootstrap.HC.
 U0 _PR_PF_stof() {
@@ -959,6 +1046,7 @@ U0 _PR_PF_stof() {
 // builtin index.
 U0 _PR_DispatchBuiltin(I64 idx) {
   switch (idx) {
+    case  1: _PR_PF_makevectors();       break;
     case  6: _PR_PF_break();             break;
     case  7: _PR_PF_random();            break;
     case  9: _PR_PF_normalize();         break;
@@ -966,8 +1054,10 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 11: _PR_PF_objerror();          break;
     case 12: _PR_PF_vlen();              break;
     case 13: _PR_PF_vectoyaw();          break;
+    case 18: _PR_PF_find();              break;
     case 19: _PR_PF_precache_sound();    break;
     case 20: _PR_PF_precache_model();    break;
+    case 22: _PR_PF_findradius();        break;
     case 25: _PR_PF_dprint();            break;
     case 26: _PR_PF_ftos();              break;
     case 27: _PR_PF_vtos();              break;
@@ -979,6 +1069,8 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 37: _PR_PF_floor();             break;
     case 38: _PR_PF_ceil();              break;
     case 43: _PR_PF_fabs();              break;
+    case 44: _PR_PF_aim();               break;
+    case 49: _PR_PF_ChangeYaw();         break;
     case 51: _PR_PF_vectoangles();       break;
     case 68: _PR_PF_precache_file();     break;
     case 75: _PR_PF_precache_model2();   break;
