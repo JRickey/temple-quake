@@ -18,10 +18,8 @@
 //
 // DEFERRED:
 //   - File IO (PR_LoadProgs reading a real file from disk)
-//   - Entity ops: LOAD/STORE_ENT/FLD/FNC, ADDRESS, STOREP_*, OP_STATE
-//   - Vector arithmetic (MUL_V, ADD_V, SUB_V, EQ_V, NE_V, NOT_V)
 //   - String compare (EQ_S, NE_S)
-//   - OP_CALL* and the builtin dispatch — needs the builtin table
+//   - OP_STATE — needs server context (pr_global_struct->self/time)
 //   - PR_LoadStrings / PR_AllocString runtime string pool growth
 //   - SaveGame, profiling
 
@@ -129,6 +127,13 @@
 #define MAX_STACK_DEPTH  32
 #define LOCALSTACK_SIZE  2048
 
+// Edict pool. Vanilla Quake bumped MAX_EDICTS to 600 across releases;
+// for the VM unit tests a much smaller pool is enough. Each edict
+// occupies `pr_entityfields` 4-byte slots in `pr_edicts`. Total slots
+// = MAX_EDICTS * MAX_ENTITY_FIELDS.
+#define MAX_EDICTS         64
+#define MAX_ENTITY_FIELDS  64
+
 // ============================================================
 // On-disk structures (pr_comp.h)
 // ============================================================
@@ -216,6 +221,13 @@ I64           _pr_depth = 0;
 
 I32           _pr_localstack[LOCALSTACK_SIZE];
 I64           _pr_localstack_used = 0;
+
+// Flat edict storage: [edict 0 fields...][edict 1 fields...][...]
+// Sized at MAX_EDICTS * MAX_ENTITY_FIELDS slots so we don't need a
+// runtime allocator. PR_LoadProgsFromBuffer caps pr_entityfields to
+// MAX_ENTITY_FIELDS.
+I32           pr_edicts[MAX_EDICTS * MAX_ENTITY_FIELDS];
+I64           pr_max_edicts = MAX_EDICTS;
 
 Bool          pr_halted = FALSE;       // set TRUE on OP_DONE
 Bool          pr_runaway = FALSE;      // set TRUE on > 100k step limit
@@ -307,6 +319,30 @@ U0 _PR_SetFloat(I64 ofs, F64 v) {
 }
 
 // ============================================================
+// Edict / field addressing
+// ============================================================
+//
+// An edict is a contiguous run of `pr_entityfields` 4-byte slots in
+// `pr_edicts`. A "field offset" stored in a ddef_t is in 4-byte
+// slot units (matches `(int *)&ed->v + ofs` arithmetic in stock
+// Quake). A "field pointer" — the value produced by OP_ADDRESS and
+// consumed by OP_STOREP_* — is a BYTE offset into pr_edicts (matches
+// Quake's `(byte *)sv.edicts + b->_int`). Slot index = byte_ofs >> 2.
+
+I64 _PR_EdictFieldSlot(I64 ent, I64 field_ofs) {
+  return ent * pr_entityfields + field_ofs;
+}
+
+I64 _PR_FieldPointerFromEntity(I64 ent, I64 field_ofs) {
+  // Encoded as a byte offset so OP_STOREP can decode with `>> 2`.
+  return _PR_EdictFieldSlot(ent, field_ofs) << 2;
+}
+
+I64 _PR_FieldSlotFromPointer(I64 ptr) {
+  return ptr >> 2;
+}
+
+// ============================================================
 // PR_LoadProgsFromBuffer — header validation + endian fix-up.
 // ============================================================
 //
@@ -373,6 +409,17 @@ Bool PR_LoadProgsFromBuffer(U8 *buf, I64 buflen) {
   pr_numfielddefs   = pr_progs->numfielddefs;
   pr_numstrings     = pr_progs->numstrings;
   pr_entityfields   = pr_progs->entityfields;
+  if (pr_entityfields > MAX_ENTITY_FIELDS) {
+    Print("PR_LoadProgs: entityfields %d exceeds MAX_ENTITY_FIELDS %d\n",
+          pr_entityfields, MAX_ENTITY_FIELDS);
+    return FALSE;
+  }
+  // Reset the edict pool on (re)load so leftover values from a prior
+  // progs don't leak into the new one.
+  I64 _ei;
+  for (_ei = 0; _ei < MAX_EDICTS * MAX_ENTITY_FIELDS; _ei++) {
+    pr_edicts[_ei] = 0;
+  }
 
   // Byte-swap pass on tables (statements / globaldefs / fielddefs /
   // functions / globals) is a no-op on x86_64 since LittleLong is
@@ -748,6 +795,62 @@ U0 PR_ExecuteProgram(I64 fnum) {
         bitop_a = _PR_GetFloat(a);
         bitop_b = _PR_GetFloat(b);
         _PR_SetFloat(c, bitop_a | bitop_b);
+        break;
+
+      // ---- entity field load ----
+      // a = global slot holding entity index
+      // b = global slot holding field offset (in 4-byte units)
+      // c = destination global slot
+      case OP_LOAD_F:
+      case OP_LOAD_S:
+      case OP_LOAD_ENT:
+      case OP_LOAD_FLD:
+      case OP_LOAD_FNC:
+        pr_globals[c] = pr_edicts[
+            _PR_EdictFieldSlot(pr_globals[a], pr_globals[b])];
+        break;
+      case OP_LOAD_V: {
+        I64 _slot = _PR_EdictFieldSlot(pr_globals[a], pr_globals[b]);
+        pr_globals[c]     = pr_edicts[_slot];
+        pr_globals[c + 1] = pr_edicts[_slot + 1];
+        pr_globals[c + 2] = pr_edicts[_slot + 2];
+      } break;
+
+      // ---- entity field address ----
+      // c = field pointer (byte offset into pr_edicts) for entity
+      // pr_globals[a] at field offset pr_globals[b]. The byte-offset
+      // encoding matches Quake's `(byte *)sv.edicts + b->_int` so a
+      // real progs.dat's pre-baked pointers Just Work.
+      case OP_ADDRESS:
+        pr_globals[c] = _PR_FieldPointerFromEntity(
+            pr_globals[a], pr_globals[b]);
+        break;
+
+      // ---- pointer store: write through a field pointer ----
+      // a = source global slot
+      // b = global slot holding field pointer (byte offset)
+      case OP_STOREP_F:
+      case OP_STOREP_S:
+      case OP_STOREP_ENT:
+      case OP_STOREP_FLD:
+      case OP_STOREP_FNC:
+        pr_edicts[_PR_FieldSlotFromPointer(pr_globals[b])] = pr_globals[a];
+        break;
+      case OP_STOREP_V: {
+        I64 _pslot = _PR_FieldSlotFromPointer(pr_globals[b]);
+        pr_edicts[_pslot]     = pr_globals[a];
+        pr_edicts[_pslot + 1] = pr_globals[a + 1];
+        pr_edicts[_pslot + 2] = pr_globals[a + 2];
+      } break;
+
+      // ---- not (non-float scalar variants) ----
+      // OP_NOT_S/ENT/FNC operate on integer slots — they're "is this
+      // handle zero?" checks, not float compares. Result is a float
+      // boolean (1.0 / 0.0) per Quake convention.
+      case OP_NOT_S:
+      case OP_NOT_ENT:
+      case OP_NOT_FNC:
+        _PR_SetFloat(c, pr_globals[a] == 0);
         break;
 
       // ---- store (no type conversion needed at this layer) ----

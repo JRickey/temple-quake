@@ -475,4 +475,165 @@ _PR_SetFloat(41, 1.0);                          // make y nonzero
 PR_ExecuteProgram(2);
 ASSERT_NEAR(_PR_GetFloat(46), 0.0, 0.0001, "OP_NOT_V_nonzero_vec");
 
+// ============================================================
+// Entity ops (LOAD_F/V/S/ENT/FLD/FNC, ADDRESS, STOREP_*, NOT_S/ENT/FNC)
+// ============================================================
+//
+// Set up a minimal entity layout: 8 fields per edict, 4 edicts.
+// Field layout (slot offsets within an edict):
+//   0   F32 health
+//   1   I32 string-offset of name
+//   2..4  vec3 origin
+//   5   I32 entity-handle of owner
+//   6   I32 function index of think
+//   7   I32 field-offset (an EV_FIELD slot)
+//
+// We need to update entityfields in the header and reload so
+// pr_entityfields takes the new value. The header location is
+// pr_progs->entityfields; we'll bump it to 8 and reload.
+
+_t_hdr->entityfields = 8;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_entity_ops");
+ASSERT_EQ(pr_entityfields, 8, "entityfields_set");
+
+// Restore fn[1] to a regular (inert) function and use fn[2] as entry.
+_t_fn[1].first_statement = 0;
+
+// Helper layout for the entity tests:
+//   globals[40] = entity index (entity 2 for these tests)
+//   globals[41] = field offset (varies per test)
+//   globals[42] = result destination for LOAD_F / LOAD_S / etc.
+//   globals[46..48] = result destination for LOAD_V
+//   globals[50] = source value for STOREP_F
+//   globals[51] = field pointer (computed by ADDRESS)
+//   globals[60..62] = source vec3 for STOREP_V
+
+// Seed pr_edicts directly (entity 2, field 0 = health, F32 bits of 75.0).
+pr_edicts[2 * 8 + 0] = _PR_F64_to_F32(75.0);
+pr_edicts[2 * 8 + 1] = 1;                       // name = string idx 1 ("entry")
+pr_edicts[2 * 8 + 2] = _PR_F64_to_F32(10.0);    // origin.x
+pr_edicts[2 * 8 + 3] = _PR_F64_to_F32(20.0);    // origin.y
+pr_edicts[2 * 8 + 4] = _PR_F64_to_F32(30.0);    // origin.z
+
+// ---- OP_LOAD_F: pull health out ----
+pr_globals[40] = 2;                              // entity index
+pr_globals[41] = 0;                              // field offset = health
+_PR_SetFloat(42, 0.0);
+_t_st[1].op = OP_LOAD_F; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 42;
+_t_st[2].op = OP_DONE;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 75.0, 0.0001, "OP_LOAD_F");
+
+// ---- OP_LOAD_S: pull string-offset (an I32 slot) ----
+pr_globals[41] = 1;                              // field offset = name
+pr_globals[42] = 0;
+_t_st[1].op = OP_LOAD_S;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[42], 1, "OP_LOAD_S");
+
+// ---- OP_LOAD_V: pull origin (3 slots) ----
+pr_globals[41] = 2;                              // field offset = origin
+_PR_SetFloat(46, 0.0); _PR_SetFloat(47, 0.0); _PR_SetFloat(48, 0.0);
+_t_st[1].op = OP_LOAD_V; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 10.0, 0.0001, "OP_LOAD_V_x");
+ASSERT_NEAR(_PR_GetFloat(47), 20.0, 0.0001, "OP_LOAD_V_y");
+ASSERT_NEAR(_PR_GetFloat(48), 30.0, 0.0001, "OP_LOAD_V_z");
+
+// ---- OP_LOAD_ENT/FLD/FNC: same shape as LOAD_S ----
+// Re-set a/b/c explicitly — prior LOAD_V left c=46.
+pr_edicts[2 * 8 + 5] = 7;                       // owner = entity 7
+pr_globals[41] = 5;
+pr_globals[42] = 0;
+_t_st[1].op = OP_LOAD_ENT; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 42;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[42], 7, "OP_LOAD_ENT");
+
+pr_edicts[2 * 8 + 6] = 13;                      // think = function 13
+pr_globals[41] = 6;
+pr_globals[42] = 0;
+_t_st[1].op = OP_LOAD_FNC; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 42;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[42], 13, "OP_LOAD_FNC");
+
+pr_edicts[2 * 8 + 7] = 4;                       // an EV_FIELD slot
+pr_globals[41] = 7;
+pr_globals[42] = 0;
+_t_st[1].op = OP_LOAD_FLD; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 42;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[42], 4, "OP_LOAD_FLD");
+
+// ---- OP_ADDRESS: produce a field pointer ----
+// entity 2, field 0 → slot index 16, byte offset 64.
+pr_globals[40] = 2;
+pr_globals[41] = 0;
+pr_globals[51] = 0;
+_t_st[1].op = OP_ADDRESS; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 51;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[51], 64, "OP_ADDRESS_byte_offset");
+
+// ---- OP_STOREP_F: write health=42.0 through that pointer ----
+_PR_SetFloat(50, 42.0);                          // source
+pr_edicts[2 * 8 + 0] = 0;                       // clear so we see the write
+_t_st[1].op = OP_STOREP_F; _t_st[1].a = 50; _t_st[1].b = 51; _t_st[1].c = 0;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[2 * 8 + 0]), 42.0, 0.0001, "OP_STOREP_F");
+
+// ---- OP_STOREP_V: write origin via a vec pointer ----
+// Compute a fresh pointer to entity 2, field 2 (origin). The prior
+// statement was OP_STOREP_F (a=50,b=51,c=0), so reset operands.
+pr_globals[41] = 2;
+_t_st[1].op = OP_ADDRESS; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 51;
+PR_ExecuteProgram(2);
+I64 _t_origin_ptr = pr_globals[51];
+
+_PR_SetFloat(60, 7.0); _PR_SetFloat(61, 8.0); _PR_SetFloat(62, 9.0);
+pr_edicts[2 * 8 + 2] = 0;
+pr_edicts[2 * 8 + 3] = 0;
+pr_edicts[2 * 8 + 4] = 0;
+_t_st[1].op = OP_STOREP_V; _t_st[1].a = 60; _t_st[1].b = 51; _t_st[1].c = 0;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[2 * 8 + 2]), 7.0, 0.0001, "OP_STOREP_V_x");
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[2 * 8 + 3]), 8.0, 0.0001, "OP_STOREP_V_y");
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[2 * 8 + 4]), 9.0, 0.0001, "OP_STOREP_V_z");
+
+// Suppress "unused local" — _t_origin_ptr is documentary.
+ASSERT_EQ(_t_origin_ptr > 0, 1, "ADDRESS_for_origin_nonzero");
+
+// ---- OP_STOREP_S/ENT/FLD/FNC: same machinery on a 1-slot field ----
+pr_globals[40] = 2;
+pr_globals[41] = 5;                              // owner field
+_t_st[1].op = OP_ADDRESS; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 51;
+PR_ExecuteProgram(2);
+pr_globals[50] = 99;                             // new owner handle
+pr_edicts[2 * 8 + 5] = 0;
+_t_st[1].op = OP_STOREP_ENT; _t_st[1].a = 50; _t_st[1].b = 51; _t_st[1].c = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_edicts[2 * 8 + 5], 99, "OP_STOREP_ENT");
+
+// ---- OP_NOT_S/ENT/FNC: zero → 1.0, nonzero → 0.0 ----
+pr_globals[40] = 0;
+_t_st[1].op = OP_NOT_S; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 42;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NOT_S_zero");
+pr_globals[40] = 5;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NOT_S_nonzero");
+
+pr_globals[40] = 0;
+_t_st[1].op = OP_NOT_ENT;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NOT_ENT_zero");
+pr_globals[40] = 3;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NOT_ENT_nonzero");
+
+pr_globals[40] = 0;
+_t_st[1].op = OP_NOT_FNC;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NOT_FNC_zero");
+pr_globals[40] = 1;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NOT_FNC_nonzero");
+
 TEST_SUMMARY;
