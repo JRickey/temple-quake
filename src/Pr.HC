@@ -18,7 +18,6 @@
 //
 // DEFERRED:
 //   - File IO (PR_LoadProgs reading a real file from disk)
-//   - String compare (EQ_S, NE_S)
 //   - OP_STATE — needs server context (pr_global_struct->self/time)
 //   - PR_LoadStrings / PR_AllocString runtime string pool growth
 //   - SaveGame, profiling
@@ -694,6 +693,29 @@ U0 PR_ExecuteProgram(I64 fnum) {
         break;
       case OP_DIV_F:
         _PR_SetFloat(c, _PR_GetFloat(a) / _PR_GetFloat(b));
+        break;
+
+      // ---- handle compare (strings, entities, functions) ----
+      // Strings live in pr_strings; the slot value is the offset.
+      // EQ_S / NE_S compare the resolved bytes via strcmp. Entities
+      // and function handles are bare integers — compare directly.
+      case OP_EQ_S:
+        _PR_SetFloat(c,
+            Q_strcmp(_PR_GetString(pr_globals[a]),
+                     _PR_GetString(pr_globals[b])) == 0);
+        break;
+      case OP_NE_S:
+        _PR_SetFloat(c,
+            Q_strcmp(_PR_GetString(pr_globals[a]),
+                     _PR_GetString(pr_globals[b])) != 0);
+        break;
+      case OP_EQ_E:
+      case OP_EQ_FNC:
+        _PR_SetFloat(c, pr_globals[a] == pr_globals[b]);
+        break;
+      case OP_NE_E:
+      case OP_NE_FNC:
+        _PR_SetFloat(c, pr_globals[a] != pr_globals[b]);
         break;
 
       // ---- vector arithmetic ----

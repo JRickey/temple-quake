@@ -636,4 +636,61 @@ pr_globals[40] = 1;
 PR_ExecuteProgram(2);
 ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NOT_FNC_nonzero");
 
+// ============================================================
+// Handle compares (EQ_S/NE_S, EQ_E/NE_E, EQ_FNC/NE_FNC)
+// ============================================================
+//
+// Strings: pr_strings has "\0entry\0Hello QC!\0" — offset 1 = "entry",
+// offset 7 = "Hello QC!". Two slots holding the same offset must
+// compare equal; different offsets to different strings unequal.
+// EQ_E/NE_E and EQ_FNC/NE_FNC are bare integer compares.
+
+// ---- OP_EQ_S / OP_NE_S ----
+pr_globals[40] = 1;                              // "entry"
+pr_globals[41] = 1;                              // "entry"
+_PR_SetFloat(42, 0.0);
+_t_st[1].op = OP_EQ_S; _t_st[1].a = 40; _t_st[1].b = 41; _t_st[1].c = 42;
+_t_st[2].op = OP_DONE;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_EQ_S_match");
+
+pr_globals[41] = 7;                              // "Hello QC!"
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_EQ_S_differ");
+
+_t_st[1].op = OP_NE_S;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NE_S_differ");
+pr_globals[41] = 1;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NE_S_match");
+
+// ---- OP_EQ_E / OP_NE_E (entity-handle compare) ----
+pr_globals[40] = 5;
+pr_globals[41] = 5;
+_t_st[1].op = OP_EQ_E;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_EQ_E_match");
+pr_globals[41] = 6;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_EQ_E_differ");
+
+_t_st[1].op = OP_NE_E;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NE_E_differ");
+pr_globals[41] = 5;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 0.0, 0.0001, "OP_NE_E_match");
+
+// ---- OP_EQ_FNC / OP_NE_FNC (function-index compare) ----
+pr_globals[40] = 2;
+pr_globals[41] = 2;
+_t_st[1].op = OP_EQ_FNC;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_EQ_FNC_match");
+pr_globals[41] = 3;
+_t_st[1].op = OP_NE_FNC;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NE_FNC_differ");
+
 TEST_SUMMARY;
