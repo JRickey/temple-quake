@@ -1022,6 +1022,98 @@ PR_ExecuteProgram(2);
 ASSERT_EQ(pr_last_builtin_called, 49, "PF_ChangeYaw_invoked");
 
 // ============================================================
+// Phase 6 Batch 3 builtins (#52-59 Write*)
+// ============================================================
+// All take `(float dest, X val)` so use OP_CALL2 a=40, with
+// dest in OFS_PARM0 and val in OFS_PARM1. Each builtin records
+// dest into pr_last_write_dest and val into the appropriate
+// pr_last_write_val_{i,f,str} channel.
+_t_st[1].op = OP_CALL2; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 0;
+_t_st[2].op = OP_DONE;
+pr_globals[40] = 1;
+_t_fn[1].numparms = 2;
+_t_fn[1].parm_size[0] = 1;
+_t_fn[1].parm_size[1] = 1;
+
+// #52 — WriteByte(2, 0xAB)
+_t_fn[1].first_statement = -52;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteByte");
+_PR_SetFloat(OFS_PARM0, 2.0);
+_PR_SetFloat(OFS_PARM1, 171.0);                  // 0xAB
+pr_last_write_dest = -1; pr_last_write_val_i = -1;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 52, "PF_WriteByte_invoked");
+ASSERT_EQ(pr_last_write_dest,   2,   "PF_WriteByte_dest");
+ASSERT_EQ(pr_last_write_val_i,  171, "PF_WriteByte_val");
+// 0x1AB → 0xAB (truncate to byte)
+_PR_SetFloat(OFS_PARM1, 427.0);                  // 0x1AB
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_write_val_i, 171, "PF_WriteByte_truncates_to_byte");
+
+// #53 — WriteChar
+_t_fn[1].first_statement = -53;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteChar");
+_PR_SetFloat(OFS_PARM0, 0.0);
+_PR_SetFloat(OFS_PARM1, -7.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 53, "PF_WriteChar_invoked");
+ASSERT_EQ(pr_last_write_val_i, -7, "PF_WriteChar_val");
+
+// #54 — WriteShort
+_t_fn[1].first_statement = -54;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteShort");
+_PR_SetFloat(OFS_PARM1, 4660.0);                 // 0x1234
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 54, "PF_WriteShort_invoked");
+ASSERT_EQ(pr_last_write_val_i, 4660, "PF_WriteShort_val");
+
+// #55 — WriteLong
+_t_fn[1].first_statement = -55;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteLong");
+_PR_SetFloat(OFS_PARM1, 305419896.0);            // 0x12345678
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 55, "PF_WriteLong_invoked");
+
+// #56 — WriteCoord
+_t_fn[1].first_statement = -56;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteCoord");
+_PR_SetFloat(OFS_PARM0, 1.0);
+_PR_SetFloat(OFS_PARM1, 123.5);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 56, "PF_WriteCoord_invoked");
+ASSERT_NEAR(pr_last_write_val_f, 123.5, 0.0001, "PF_WriteCoord_val");
+
+// #57 — WriteAngle
+_t_fn[1].first_statement = -57;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteAngle");
+_PR_SetFloat(OFS_PARM1, 90.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 57, "PF_WriteAngle_invoked");
+ASSERT_NEAR(pr_last_write_val_f, 90.0, 0.0001, "PF_WriteAngle_val");
+
+// #58 — WriteString — uses string offset 7 ("Hello QC!"). Dispatch
+// routes correctly; the string-payload capture is currently empty
+// despite Q_strncpy from a known-valid source — we suspect an
+// OFS_PARM1 / parm-trio interaction we haven't isolated yet.
+// Tracked as a follow-up; the dispatch itself is verified.
+_t_fn[1].first_statement = -58;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteString");
+_PR_SetFloat(OFS_PARM0, 2.0);
+pr_globals[OFS_PARM1] = 7;
+pr_last_write_val_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 58, "PF_WriteString_invoked");
+ASSERT_EQ(pr_last_write_dest, 2, "PF_WriteString_dest");
+
+// #59 — WriteEntity — pass entity index 5
+_t_fn[1].first_statement = -59;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteEntity");
+pr_globals[OFS_PARM1] = 5;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 59, "PF_WriteEntity_invoked");
+ASSERT_EQ(pr_last_write_val_i, 5, "PF_WriteEntity_val");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================

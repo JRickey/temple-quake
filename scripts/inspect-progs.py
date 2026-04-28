@@ -111,6 +111,7 @@ def main(argv: list[str]) -> int:
                      18, 19, 20, 22, 25, 26,
                      27, 28, 29, 30, 31,
                      36, 37, 38, 43, 44, 49, 51,
+                     52, 53, 54, 55, 56, 57, 58, 59,
                      68, 75, 76, 77, 81}
         rows: list[tuple[int, str, str]] = []
         for idx in sorted(builtin_calls):

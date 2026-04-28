@@ -295,6 +295,19 @@ Bool pr_last_op_state_called = FALSE;
 F64  pr_last_op_state_frame  = 0.0;
 I64  pr_last_op_state_think  = 0;
 
+// Network-message Write* instrumentation. Real Quake routes Write*
+// builtins into one of several msg buffers (sv.datagram,
+// sv.reliable_datagram, sv.signon, sv.multicast). We don't have a
+// network stack; record the last call's destination + value so
+// tests can verify dispatch shape. The "value" channel is
+// over-typed: integer-ish builtins (Byte/Char/Short/Long/Entity)
+// stash into pr_last_write_val_i; float-ish (Coord/Angle) use
+// pr_last_write_val_f; WriteString fills pr_last_write_val_str.
+I64 pr_last_write_dest    = 0;
+I64 pr_last_write_val_i   = 0;
+F64 pr_last_write_val_f   = 0.0;
+U8  pr_last_write_val_str[256];
+
 // ============================================================
 // IEEE-754 F32 ↔ F64 conversion helpers
 // ============================================================
@@ -1041,6 +1054,85 @@ U0 _PR_PF_stof() {
   pr_last_builtin_called = 81;
 }
 
+// ============================================================
+// Phase 6 Batch 3 — network message bus (#52–#59 Write*)
+// ============================================================
+//
+// All eight Write* builtins take `(float dest, X val)` where dest
+// is the destination msg buffer (MSG_BROADCAST=0, MSG_ONE=1,
+// MSG_ALL=2, MSG_INIT=3, MSG_MULTICAST=4 in Quake). Real Quake
+// packs `val` into the appropriate network buffer. We don't have
+// a network stack; capture (dest, val) into the side channels so
+// tests can verify dispatch + the last write's shape.
+
+// #52 — WriteByte(dest, val) — pack 1 byte (0..255 truncated).
+// Note: HolyC's `&` on F64 operands acts on IEEE-754 bit patterns,
+// so we MUST go through a typed I64 local before masking.
+U0 _PR_PF_WriteByte() {
+  pr_last_write_dest = _PR_GetFloat(OFS_PARM0);
+  I64 vi = _PR_GetFloat(OFS_PARM1);
+  pr_last_write_val_i = vi & 0xFF;
+  pr_last_builtin_called = 52;
+}
+
+// #53 — WriteChar(dest, val) — pack 1 signed byte (-128..127)
+U0 _PR_PF_WriteChar() {
+  pr_last_write_dest = _PR_GetFloat(OFS_PARM0);
+  I64 vi = _PR_GetFloat(OFS_PARM1);
+  pr_last_write_val_i = vi;
+  pr_last_builtin_called = 53;
+}
+
+// #54 — WriteShort(dest, val) — pack 2 bytes (16-bit short)
+U0 _PR_PF_WriteShort() {
+  pr_last_write_dest = _PR_GetFloat(OFS_PARM0);
+  I64 vi = _PR_GetFloat(OFS_PARM1);
+  pr_last_write_val_i = vi & 0xFFFF;
+  pr_last_builtin_called = 54;
+}
+
+// #55 — WriteLong(dest, val) — pack 4 bytes
+U0 _PR_PF_WriteLong() {
+  pr_last_write_dest = _PR_GetFloat(OFS_PARM0);
+  I64 vi = _PR_GetFloat(OFS_PARM1);
+  pr_last_write_val_i = vi;
+  pr_last_builtin_called = 55;
+}
+
+// #56 — WriteCoord(dest, coord) — pack a coord (Quake packs these
+// as 16.3 fixed-point shorts; we just record the float).
+U0 _PR_PF_WriteCoord() {
+  pr_last_write_dest  = _PR_GetFloat(OFS_PARM0);
+  pr_last_write_val_f = _PR_GetFloat(OFS_PARM1);
+  pr_last_builtin_called = 56;
+}
+
+// #57 — WriteAngle(dest, angle) — pack an angle (Quake: 0..255
+// representing 0°..360°). Record the float as-is.
+U0 _PR_PF_WriteAngle() {
+  pr_last_write_dest  = _PR_GetFloat(OFS_PARM0);
+  pr_last_write_val_f = _PR_GetFloat(OFS_PARM1);
+  pr_last_builtin_called = 57;
+}
+
+// #58 — WriteString(dest, string) — pack a NUL-terminated string.
+// Resolve the string offset and copy into pr_last_write_val_str.
+U0 _PR_PF_WriteString() {
+  pr_last_write_dest = _PR_GetFloat(OFS_PARM0);
+  I64 strofs = pr_globals[OFS_PARM1];
+  U8 *s = _PR_GetString(strofs);
+  Q_strncpy(pr_last_write_val_str, s, 255);
+  pr_last_write_val_str[255] = 0;                  // belt-and-braces NUL
+  pr_last_builtin_called = 58;
+}
+
+// #59 — WriteEntity(dest, entity) — pack an entity index as a short.
+U0 _PR_PF_WriteEntity() {
+  pr_last_write_dest  = _PR_GetFloat(OFS_PARM0);
+  pr_last_write_val_i = pr_globals[OFS_PARM1] & 0xFFFF;
+  pr_last_builtin_called = 59;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
@@ -1072,6 +1164,14 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 44: _PR_PF_aim();               break;
     case 49: _PR_PF_ChangeYaw();         break;
     case 51: _PR_PF_vectoangles();       break;
+    case 52: _PR_PF_WriteByte();         break;
+    case 53: _PR_PF_WriteChar();         break;
+    case 54: _PR_PF_WriteShort();        break;
+    case 55: _PR_PF_WriteLong();         break;
+    case 56: _PR_PF_WriteCoord();        break;
+    case 57: _PR_PF_WriteAngle();        break;
+    case 58: _PR_PF_WriteString();       break;
+    case 59: _PR_PF_WriteEntity();       break;
     case 68: _PR_PF_precache_file();     break;
     case 75: _PR_PF_precache_model2();   break;
     case 76: _PR_PF_precache_sound2();   break;
