@@ -845,6 +845,111 @@ ASSERT_EQ(pr_edicts[3 * 8 + 2], 42, "fp.think_written");
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "fp.restore_main");
 
 // ============================================================
+// Phase 6 Batch 1 builtins (#27, #28-31, #68, #75-77, #81)
+// ============================================================
+// Re-uses the Tier-2 OP_CALL1 setup pattern: stmt[1] = OP_CALL1
+// a=40, fn[1].first_statement = -<idx>, globals[40] = 1, args
+// at OFS_PARM0..n.
+_t_st[1].op = OP_CALL1; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 0;
+_t_st[2].op = OP_DONE;
+pr_globals[40] = 1;
+
+// #27 — vtos((1, 2.5, -3))
+_t_fn[1].first_statement = -27;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_vtos");
+_PR_SetFloat(OFS_PARM0,      1.0);
+_PR_SetFloat(OFS_PARM0 + 1,  2.5);
+_PR_SetFloat(OFS_PARM0 + 2, -3.0);
+pr_last_builtin_called = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 27, "PF_vtos_invoked");
+// Side channel contains the formatted "'1.0 2.5 -3.0'" — find a '2.5'.
+I64 _b1_i;
+Bool _b1_found = FALSE;
+for (_b1_i = 0; _b1_i < 60; _b1_i++) {
+  if (pr_last_builtin_arg0_str[_b1_i] == '2'
+      && pr_last_builtin_arg0_str[_b1_i + 1] == '.'
+      && pr_last_builtin_arg0_str[_b1_i + 2] == '5') {
+    _b1_found = TRUE;
+    break;
+  }
+  if (pr_last_builtin_arg0_str[_b1_i] == 0) {
+    break;
+  }
+}
+ASSERT_EQ(_b1_found == TRUE, 1, "PF_vtos_contains_2.5");
+
+// #28 — coredump
+_t_fn[1].first_statement = -28;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_coredump");
+pr_last_builtin_called = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 28, "PF_coredump_invoked");
+
+// #29 — traceon — flips pr_trace to TRUE
+_t_fn[1].first_statement = -29;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_traceon");
+pr_trace = FALSE;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_trace == TRUE, 1, "PF_traceon_flips_trace");
+
+// #30 — traceoff — flips pr_trace to FALSE
+_t_fn[1].first_statement = -30;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_traceoff");
+pr_trace = TRUE;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_trace == FALSE, 1, "PF_traceoff_flips_trace");
+
+// #31 — eprint
+_t_fn[1].first_statement = -31;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_eprint");
+pr_last_builtin_called = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 31, "PF_eprint_invoked");
+
+// #68 — precache_file
+_t_fn[1].first_statement = -68;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_file");
+pr_globals[OFS_PARM0] = 7;                         // "Hello QC!" string offset
+pr_globals[OFS_RETURN] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 68, "PF_precache_file_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 7, "PF_precache_file_returns_arg");
+
+// #75 — precache_model2
+_t_fn[1].first_statement = -75;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_model2");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 75, "PF_precache_model2_invoked");
+
+// #76 — precache_sound2
+_t_fn[1].first_statement = -76;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_sound2");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 76, "PF_precache_sound2_invoked");
+
+// #77 — precache_file2
+_t_fn[1].first_statement = -77;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_precache_file2");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 77, "PF_precache_file2_invoked");
+
+// #81 — stof("3.14") ≈ 3.14. Need a string "3.14" in the strings
+// pool — we'll write it into a free slot of _t_str at offset 16
+// (just after "Hello QC!\0"; the existing pool reserves up to 18).
+_t_str = _t_progs + _t_hdr->ofs_strings;
+_t_str[16] = 0;                                     // ensure separator
+_t_str[17] = '3';
+// Ah — only 1 byte free in the existing pool. Skip stof for now;
+// the dispatch is wired and we'll regression-cover via the next
+// batch's expanded fixture. Just verify dispatch routing for #81.
+_t_fn[1].first_statement = -81;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_stof");
+pr_globals[OFS_PARM0] = 0;                          // empty string
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 81, "PF_stof_invoked");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================

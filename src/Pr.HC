@@ -863,27 +863,128 @@ U0 _PR_PF_vectoangles() {
   pr_last_builtin_called = 51;
 }
 
+// ============================================================
+// Phase 6 Batch 1 — trivial debug/no-op + simple math.
+//
+// The qwprogs.dat audit (`scripts/inspect-progs.py`) flagged 52
+// builtins not yet installed. This batch ships the easiest 10:
+// pure-math (#27 vtos, #81 stof) and recordable no-op stubs
+// (#28-31 debug, #68/75/76/77 precache variants). Each just
+// records dispatch + a side channel where applicable so tests
+// can verify routing without the full Quake server context.
+
+// #27 — vtos(vec3) → string. Format as "'X Y Z'" (Quake's exact
+// shape) into a static scratch buffer; return offset 0 since we
+// don't grow pr_strings yet, but record the formatted text.
+U0 _PR_PF_vtos() {
+  F64 x = _PR_GetFloat(OFS_PARM0);
+  F64 y = _PR_GetFloat(OFS_PARM0 + 1);
+  F64 z = _PR_GetFloat(OFS_PARM0 + 2);
+  static U8 vtos_buf[80];
+  StrPrint(vtos_buf, "'%5.1f %5.1f %5.1f'", x, y, z);
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 27;
+  I64 i = 0;
+  while (i < 255 && vtos_buf[i]) {
+    pr_last_builtin_arg0_str[i] = vtos_buf[i];
+    i++;
+  }
+  pr_last_builtin_arg0_str[i] = 0;
+}
+
+// #28 — coredump() — prints diag dump in Quake; we just record.
+U0 _PR_PF_coredump() {
+  pr_last_builtin_called = 28;
+}
+
+// #29 — traceon() — toggle bytecode trace on; flip pr_trace.
+U0 _PR_PF_traceon() {
+  pr_trace = TRUE;
+  pr_last_builtin_called = 29;
+}
+
+// #30 — traceoff() — flip pr_trace off.
+U0 _PR_PF_traceoff() {
+  pr_trace = FALSE;
+  pr_last_builtin_called = 30;
+}
+
+// #31 — eprint(entity) — debug-print an entity's fields. We don't
+// have a pretty-printer for arbitrary edicts yet; record only.
+U0 _PR_PF_eprint() {
+  pr_last_builtin_called = 31;
+}
+
+// #68 — precache_file(string) — no-op stub. Returns the same
+// string. Same shape as #19 / #20 precache_sound/model.
+U0 _PR_PF_precache_file() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  pr_globals[OFS_RETURN] = strofs;
+  pr_last_builtin_called = 68;
+}
+
+// #75 — precache_model2(string) — alias for precache_model in
+// QuakeWorld; same no-op semantics for us.
+U0 _PR_PF_precache_model2() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  pr_globals[OFS_RETURN] = strofs;
+  pr_last_builtin_called = 75;
+}
+
+// #76 — precache_sound2(string) — alias for precache_sound in QW.
+U0 _PR_PF_precache_sound2() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  pr_globals[OFS_RETURN] = strofs;
+  pr_last_builtin_called = 76;
+}
+
+// #77 — precache_file2(string) — alias for precache_file in QW.
+U0 _PR_PF_precache_file2() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  pr_globals[OFS_RETURN] = strofs;
+  pr_last_builtin_called = 77;
+}
+
+// #81 — stof(string) → float. Parse a numeric string into F64.
+// Q_atof exists in Bootstrap.HC.
+U0 _PR_PF_stof() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *s = _PR_GetString(strofs);
+  _PR_SetFloat(OFS_RETURN, Q_atof(s));
+  pr_last_builtin_called = 81;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
 U0 _PR_DispatchBuiltin(I64 idx) {
   switch (idx) {
-    case  6: _PR_PF_break();           break;
-    case  7: _PR_PF_random();          break;
-    case  9: _PR_PF_normalize();       break;
-    case 10: _PR_PF_error();           break;
-    case 11: _PR_PF_objerror();        break;
-    case 12: _PR_PF_vlen();            break;
-    case 13: _PR_PF_vectoyaw();        break;
-    case 19: _PR_PF_precache_sound();  break;
-    case 20: _PR_PF_precache_model();  break;
-    case 25: _PR_PF_dprint();          break;
-    case 26: _PR_PF_ftos();            break;
-    case 36: _PR_PF_rint();            break;
-    case 37: _PR_PF_floor();           break;
-    case 38: _PR_PF_ceil();            break;
-    case 43: _PR_PF_fabs();            break;
-    case 51: _PR_PF_vectoangles();     break;
+    case  6: _PR_PF_break();             break;
+    case  7: _PR_PF_random();            break;
+    case  9: _PR_PF_normalize();         break;
+    case 10: _PR_PF_error();             break;
+    case 11: _PR_PF_objerror();          break;
+    case 12: _PR_PF_vlen();              break;
+    case 13: _PR_PF_vectoyaw();          break;
+    case 19: _PR_PF_precache_sound();    break;
+    case 20: _PR_PF_precache_model();    break;
+    case 25: _PR_PF_dprint();            break;
+    case 26: _PR_PF_ftos();              break;
+    case 27: _PR_PF_vtos();              break;
+    case 28: _PR_PF_coredump();          break;
+    case 29: _PR_PF_traceon();           break;
+    case 30: _PR_PF_traceoff();          break;
+    case 31: _PR_PF_eprint();            break;
+    case 36: _PR_PF_rint();              break;
+    case 37: _PR_PF_floor();             break;
+    case 38: _PR_PF_ceil();              break;
+    case 43: _PR_PF_fabs();              break;
+    case 51: _PR_PF_vectoangles();       break;
+    case 68: _PR_PF_precache_file();     break;
+    case 75: _PR_PF_precache_model2();   break;
+    case 76: _PR_PF_precache_sound2();   break;
+    case 77: _PR_PF_precache_file2();    break;
+    case 81: _PR_PF_stof();              break;
     default:
       Print("PR: builtin #%d not installed\n", idx);
       pr_halted = TRUE;
