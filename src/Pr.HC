@@ -1420,6 +1420,83 @@ U0 _PR_PF_multicast() {
   pr_last_builtin_called = 82;
 }
 
+// ============================================================
+// Phase 6 Batch 8 — closeout (#8, #17, #35, #47, #67, #70)
+// ============================================================
+//
+// Closes out the qwprogs.dat dispatch table: 100% of the 68
+// referenced builtins now have a handler. Most are recordable
+// stubs; #47 nextent walks the edict pool for real.
+
+I64 pr_last_sound_ent     = 0;
+I64 pr_last_sound_chan    = 0;
+I64 pr_last_sound_sample  = 0;        // string offset
+I64 pr_last_lightstyle    = 0;        // style index
+U8  pr_last_lightstyle_str[64];
+I64 pr_last_changelevel_str = 0;      // string offset of map name
+F64 pr_last_movetogoal_dist = 0.0;
+
+// #8 — sound(entity, channel, sample, volume, attenuation) — capture
+// (entity, channel, sample-offset). Real Quake plays a sound; we
+// just record dispatch.
+U0 _PR_PF_sound() {
+  pr_last_sound_ent    = pr_globals[OFS_PARM0];
+  pr_last_sound_chan   = _PR_GetFloat(OFS_PARM1);
+  pr_last_sound_sample = pr_globals[OFS_PARM2];
+  pr_last_builtin_called = 8;
+}
+
+// #17 — checkclient() → entity. Real Quake returns a random
+// client visible from the current entity for AI line-of-sight.
+// No clients in our VM — return world (0).
+U0 _PR_PF_checkclient() {
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 17;
+}
+
+// #35 — lightstyle(style, value_str) — set a light animation
+// pattern (e.g. "abcdefghijklmnopqrst" for a smooth fade). Capture
+// the style index + string for tests.
+U0 _PR_PF_lightstyle() {
+  pr_last_lightstyle = _PR_GetFloat(OFS_PARM0);
+  I64 strofs = pr_globals[OFS_PARM1];
+  Q_strncpy(pr_last_lightstyle_str, _PR_GetString(strofs), 63);
+  pr_last_lightstyle_str[63] = 0;
+  pr_last_builtin_called = 35;
+}
+
+// #47 — nextent(start) → entity. Walks the edict pool for the
+// next allocated index past `start`. Real Quake skips
+// freed/inhibited edicts; we don't model freed-list state, so we
+// return start+1 capped at pr_next_free_edict (the highwater
+// from spawn). Returns 0 (world) when past the end.
+U0 _PR_PF_nextent() {
+  I64 start = pr_globals[OFS_PARM0];
+  I64 next  = start + 1;
+  if (next >= pr_next_free_edict) {
+    pr_globals[OFS_RETURN] = 0;
+  } else {
+    pr_globals[OFS_RETURN] = next;
+  }
+  pr_last_builtin_called = 47;
+}
+
+// #67 — movetogoal(dist) — monster-AI step toward goal_entity.
+// Real Quake walks/blocks based on geometry; record dist + return
+// 1 (moved successfully).
+U0 _PR_PF_movetogoal() {
+  pr_last_movetogoal_dist = _PR_GetFloat(OFS_PARM0);
+  _PR_SetFloat(OFS_RETURN, 1.0);
+  pr_last_builtin_called = 67;
+}
+
+// #70 — changelevel(map_name) — schedule a map change. Record
+// the requested name string offset.
+U0 _PR_PF_changelevel() {
+  pr_last_changelevel_str = pr_globals[OFS_PARM0];
+  pr_last_builtin_called = 70;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
@@ -1431,6 +1508,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case  4: _PR_PF_setsize();           break;
     case  6: _PR_PF_break();             break;
     case  7: _PR_PF_random();            break;
+    case  8: _PR_PF_sound();             break;
     case  9: _PR_PF_normalize();         break;
     case 10: _PR_PF_error();             break;
     case 11: _PR_PF_objerror();          break;
@@ -1439,6 +1517,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 14: _PR_PF_spawn();             break;
     case 15: _PR_PF_remove();            break;
     case 16: _PR_PF_traceline();         break;
+    case 17: _PR_PF_checkclient();       break;
     case 18: _PR_PF_find();              break;
     case 19: _PR_PF_precache_sound();    break;
     case 20: _PR_PF_precache_model();    break;
@@ -1455,6 +1534,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 31: _PR_PF_eprint();            break;
     case 32: _PR_PF_walkmove();          break;
     case 34: _PR_PF_droptofloor();       break;
+    case 35: _PR_PF_lightstyle();        break;
     case 36: _PR_PF_rint();              break;
     case 37: _PR_PF_floor();             break;
     case 38: _PR_PF_ceil();              break;
@@ -1464,6 +1544,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 44: _PR_PF_aim();               break;
     case 45: _PR_PF_cvar();              break;
     case 46: _PR_PF_localcmd();          break;
+    case 47: _PR_PF_nextent();           break;
     case 49: _PR_PF_ChangeYaw();         break;
     case 51: _PR_PF_vectoangles();       break;
     case 52: _PR_PF_WriteByte();         break;
@@ -1474,8 +1555,10 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 57: _PR_PF_WriteAngle();        break;
     case 58: _PR_PF_WriteString();       break;
     case 59: _PR_PF_WriteEntity();       break;
+    case 67: _PR_PF_movetogoal();        break;
     case 68: _PR_PF_precache_file();     break;
     case 69: _PR_PF_makestatic();        break;
+    case 70: _PR_PF_changelevel();       break;
     case 72: _PR_PF_cvar_set();          break;
     case 73: _PR_PF_centerprint();       break;
     case 74: _PR_PF_ambientsound();      break;

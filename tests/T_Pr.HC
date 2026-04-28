@@ -1368,6 +1368,79 @@ ASSERT_EQ(pr_last_builtin_called, 82, "PF_multicast_invoked");
 ASSERT_EQ(pr_last_multicast_dest, 3, "PF_multicast_sendto");
 
 // ============================================================
+// Phase 6 Batch 8 — closeout (#8, #17, #35, #47, #67, #70)
+// ============================================================
+//
+// 100% qwprogs.dat dispatch coverage after this batch.
+
+// #8 — sound(ent=5, chan=2, sample=7, vol, attn) — captures
+// (entity, channel, sample-offset)
+_t_fn[1].first_statement = -8;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_sound");
+pr_globals[OFS_PARM0] = 5;
+_PR_SetFloat(OFS_PARM1, 2.0);
+pr_globals[OFS_PARM2] = 7;
+_PR_SetFloat(OFS_PARM3, 1.0);
+_PR_SetFloat(OFS_PARM4, 1.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 8, "PF_sound_invoked");
+ASSERT_EQ(pr_last_sound_ent,    5, "PF_sound_ent");
+ASSERT_EQ(pr_last_sound_chan,   2, "PF_sound_chan");
+ASSERT_EQ(pr_last_sound_sample, 7, "PF_sound_sample");
+
+// #17 — checkclient → 0 (no clients)
+_t_fn[1].first_statement = -17;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_checkclient");
+pr_globals[OFS_RETURN] = 999;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 17, "PF_checkclient_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_checkclient_returns_world");
+
+// #35 — lightstyle(style=4, "Hello QC!") — captures index + str
+_t_fn[1].first_statement = -35;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_lightstyle");
+_PR_SetFloat(OFS_PARM0, 4.0);
+pr_globals[OFS_PARM1] = 7;
+pr_last_lightstyle = 0;
+pr_last_lightstyle_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 35, "PF_lightstyle_invoked");
+ASSERT_EQ(pr_last_lightstyle, 4, "PF_lightstyle_index");
+ASSERT_EQ(Q_strcmp(pr_last_lightstyle_str, "Hello QC!"), 0, "PF_lightstyle_str");
+
+// #47 — nextent — pr_next_free_edict was bumped earlier by spawn
+// tests; before this test we set it to a known value.
+_t_fn[1].first_statement = -47;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_nextent");
+pr_next_free_edict = 5;
+pr_globals[OFS_PARM0] = 2;                       // start = 2 → next = 3
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 47, "PF_nextent_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 3, "PF_nextent_returns_next");
+// Past end → 0
+pr_globals[OFS_PARM0] = 4;                       // start = 4 → next = 5 ≥ 5
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_nextent_past_end");
+
+// #67 — movetogoal(7.5) → 1
+_t_fn[1].first_statement = -67;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_movetogoal");
+_PR_SetFloat(OFS_PARM0, 7.5);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 67, "PF_movetogoal_invoked");
+ASSERT_NEAR(pr_last_movetogoal_dist, 7.5, 0.0001, "PF_movetogoal_dist");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 1.0, 0.0001, "PF_movetogoal_returns_ok");
+
+// #70 — changelevel("Hello QC!")
+_t_fn[1].first_statement = -70;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_changelevel");
+pr_globals[OFS_PARM0] = 7;
+pr_last_changelevel_str = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 70, "PF_changelevel_invoked");
+ASSERT_EQ(pr_last_changelevel_str, 7, "PF_changelevel_records_name");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================
