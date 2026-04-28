@@ -546,6 +546,24 @@ U8 *PR_FunctionName(I64 fnum) {
   return _PR_GetString(pr_functions[fnum].s_name);
 }
 
+// Walk pr_fielddefs looking for a name match. Returns the field
+// offset (in 4-byte slot units within an entity's field block) or
+// -1 if not found. Linear scan — Quake's progs typically have
+// ~200 fielddefs so this is fine; cache call sites if it ever
+// matters. Used by OP_STATE to resolve symbolic names like
+// "frame" / "nextthink" / "think" to their layout offsets without
+// hardcoding the entvars_t struct.
+I64 _PR_FieldOfsByName(U8 *name) {
+  I64 i;
+  for (i = 0; i < pr_numfielddefs; i++) {
+    U8 *fname = _PR_GetString(pr_fielddefs[i].s_name);
+    if (Q_strcmp(fname, name) == 0) {
+      return pr_fielddefs[i].ofs;
+    }
+  }
+  return -1;
+}
+
 U0 _PR_StackTrace() {
   Print("--- pr stack ---\n");
   I64 i;
@@ -1164,18 +1182,37 @@ U0 PR_ExecuteProgram(I64 fnum) {
         }
         break;
       // ---- OP_STATE — animation think-state setter ----
-      // Real Quake reads pr_global_struct->self, writes
-      // self->frame = a, self->nextthink = time + 0.05,
-      // self->think = b — needs the field-offset table parsed from
-      // the progs's ddef_t entries, which we don't yet do. For
-      // Phase 5 we record the operands so tests can verify dispatch
-      // and the step counter advances; the side effect on the edict
-      // is deferred until we wire up symbolic field lookup.
-      case OP_STATE:
+      // Mirrors Quake's pr_exec.c: reads `self` and `time` from the
+      // server-globals overlay, then writes through to the entity's
+      // frame/nextthink/think fields. Field offsets are resolved
+      // symbolically via `_PR_FieldOfsByName` against the progs's
+      // ddef_t fielddefs table — no hardcoded entvars_t layout.
+      // If any of the three names isn't in the table (e.g. a
+      // synthetic test fixture), the corresponding write is
+      // skipped; the recordable side channels still update so
+      // dispatch-only tests stay green.
+      case OP_STATE: {
         pr_last_op_state_called = TRUE;
         pr_last_op_state_frame  = _PR_GetFloat(a);
         pr_last_op_state_think  = pr_globals[b];
-        break;
+        I64 _self_ent = pr_globals[OFS_GS_SELF];
+        F64 _time     = _PR_GetFloat(OFS_GS_TIME);
+        I64 _ofs_frame     = _PR_FieldOfsByName("frame");
+        I64 _ofs_nextthink = _PR_FieldOfsByName("nextthink");
+        I64 _ofs_think     = _PR_FieldOfsByName("think");
+        if (_ofs_frame >= 0) {
+          pr_edicts[_PR_EdictFieldSlot(_self_ent, _ofs_frame)] =
+              _PR_F64_to_F32(pr_last_op_state_frame);
+        }
+        if (_ofs_nextthink >= 0) {
+          pr_edicts[_PR_EdictFieldSlot(_self_ent, _ofs_nextthink)] =
+              _PR_F64_to_F32(_time + 0.1);
+        }
+        if (_ofs_think >= 0) {
+          pr_edicts[_PR_EdictFieldSlot(_self_ent, _ofs_think)] =
+              pr_last_op_state_think;
+        }
+      } break;
 
       case OP_DONE:
         pr_xstatement = _PR_LeaveFunction();

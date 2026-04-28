@@ -716,8 +716,13 @@ ASSERT_EQ(PR_LoadProgsFromFile("::/Tmp/no_such_file.dat") == FALSE, 1,
 // ============================================================
 // OP_STATE — animation think-state setter (recordable stub)
 // ============================================================
-// We don't yet parse fielddefs to resolve symbolic field offsets,
-// so OP_STATE just records its operands for tests to verify.
+// OP_STATE side-channel record (fielddef-free fixture: the main
+// _t_progs has numfielddefs=0, so the symbolic mutation skips and
+// we only verify that dispatch fired + side-channel state was set).
+// The previous test (PrLoadProgsFromFile) left pr_statements
+// pointing at the on-disk buffer, so reload _t_progs first.
+
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_op_state");
 
 pr_last_op_state_called = FALSE;
 pr_last_op_state_frame  = 0.0;
@@ -733,12 +738,126 @@ ASSERT_NEAR(pr_last_op_state_frame, 13.0, 0.0001, "OP_STATE_frame");
 ASSERT_EQ(pr_last_op_state_think, 7, "OP_STATE_think");
 
 // ============================================================
+// _PR_FieldOfsByName + OP_STATE actual edict mutation
+// ============================================================
+//
+// Build a small focused progs.dat with three fielddefs (frame,
+// nextthink, think) and exercise the symbolic field lookup +
+// OP_STATE's edict-mutation path. Layout (in `_t_fp` buffer):
+//
+//   off    | what
+//   -------+---------------------------------------------
+//   0      | dprograms_t header (60 bytes)
+//   60     | dstatement_t[4]   — sentinel + OP_STATE + DONE pad
+//   92     | ddef_t[3]         — frame/nextthink/think
+//   116    | dfunction_t[2]    — sentinel + main
+//   188    | strings           — "\0frame\0nextthink\0think\0"
+//   211    | (pad to 4)
+//   212    | globals[128]      — 512 bytes, room for OFS_GS_*
+//   724    | end
+//
+// entityfields = 8: slots 0=frame, 1=nextthink, 2=think (we pick
+// these arbitrarily since this is a synthetic progs).
+
+U8 _t_fp[1024];
+I64 _t_fpi;
+for (_t_fpi = 0; _t_fpi < 1024; _t_fpi++) {
+  _t_fp[_t_fpi] = 0;
+}
+dprograms_t *_t_fp_hdr = _t_fp;
+_t_fp_hdr->version       = 6;
+_t_fp_hdr->ofs_statements = 60;
+_t_fp_hdr->numstatements  = 4;
+_t_fp_hdr->ofs_globaldefs = 92;
+_t_fp_hdr->numglobaldefs  = 0;
+_t_fp_hdr->ofs_fielddefs  = 92;
+_t_fp_hdr->numfielddefs   = 3;
+_t_fp_hdr->ofs_functions  = 116;
+_t_fp_hdr->numfunctions   = 2;
+_t_fp_hdr->ofs_strings    = 188;
+_t_fp_hdr->numstrings     = 24;             // "\0frame\0nextthink\0think\0"
+_t_fp_hdr->ofs_globals    = 212;
+_t_fp_hdr->numglobals     = 128;
+_t_fp_hdr->entityfields   = 8;
+
+// statements
+dstatement_t *_t_fp_st = _t_fp + _t_fp_hdr->ofs_statements;
+_t_fp_st[0].op = OP_DONE;
+_t_fp_st[1].op = OP_STATE; _t_fp_st[1].a = 40; _t_fp_st[1].b = 41; _t_fp_st[1].c = 0;
+_t_fp_st[2].op = OP_DONE;
+_t_fp_st[3].op = OP_DONE;
+
+// fielddefs — type/ofs match a small synthetic edict layout.
+ddef_t *_t_fp_fd = _t_fp + _t_fp_hdr->ofs_fielddefs;
+_t_fp_fd[0].type = EV_FLOAT;    _t_fp_fd[0].ofs = 0; _t_fp_fd[0].s_name = 1;   // frame
+_t_fp_fd[1].type = EV_FLOAT;    _t_fp_fd[1].ofs = 1; _t_fp_fd[1].s_name = 7;   // nextthink
+_t_fp_fd[2].type = EV_FUNCTION; _t_fp_fd[2].ofs = 2; _t_fp_fd[2].s_name = 17;  // think
+
+// functions
+dfunction_t *_t_fp_fn = _t_fp + _t_fp_hdr->ofs_functions;
+_t_fp_fn[0].first_statement = 0;             // sentinel
+_t_fp_fn[1].first_statement = 1;
+_t_fp_fn[1].parm_start      = 30;
+_t_fp_fn[1].numparms        = 0;
+
+// strings: "\0frame\0nextthink\0think\0"
+U8 *_t_fp_str = _t_fp + _t_fp_hdr->ofs_strings;
+_t_fp_str[0] = 0;
+_t_fp_str[1]  = 'f'; _t_fp_str[2]  = 'r'; _t_fp_str[3]  = 'a';
+_t_fp_str[4]  = 'm'; _t_fp_str[5]  = 'e'; _t_fp_str[6]  = 0;
+_t_fp_str[7]  = 'n'; _t_fp_str[8]  = 'e'; _t_fp_str[9]  = 'x';
+_t_fp_str[10] = 't'; _t_fp_str[11] = 't'; _t_fp_str[12] = 'h';
+_t_fp_str[13] = 'i'; _t_fp_str[14] = 'n'; _t_fp_str[15] = 'k';
+_t_fp_str[16] = 0;
+_t_fp_str[17] = 't'; _t_fp_str[18] = 'h'; _t_fp_str[19] = 'i';
+_t_fp_str[20] = 'n'; _t_fp_str[21] = 'k'; _t_fp_str[22] = 0;
+
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_fp, 1024) == TRUE, 1, "fp.load");
+ASSERT_EQ(pr_numfielddefs, 3, "fp.numfielddefs");
+ASSERT_EQ(pr_entityfields, 8, "fp.entityfields");
+
+// ---- field-lookup helper ----
+ASSERT_EQ(_PR_FieldOfsByName("frame"),     0, "fp.lookup_frame");
+ASSERT_EQ(_PR_FieldOfsByName("nextthink"), 1, "fp.lookup_nextthink");
+ASSERT_EQ(_PR_FieldOfsByName("think"),     2, "fp.lookup_think");
+ASSERT_EQ(_PR_FieldOfsByName("missing"),  -1, "fp.lookup_missing_returns_neg1");
+
+// ---- OP_STATE actual mutation ----
+// Self entity = 3, time = 5.0. Operand a (slot 40) holds the new
+// frame value (17.0); operand b (slot 41) holds the new think
+// function index (42).
+pr_globals[OFS_GS_SELF] = 3;
+_PR_SetFloat(OFS_GS_TIME, 5.0);
+_PR_SetFloat(40, 17.0);
+pr_globals[41] = 42;
+
+// Clear the target slots before the test so we observe the write.
+pr_edicts[3 * 8 + 0] = 0;
+pr_edicts[3 * 8 + 1] = 0;
+pr_edicts[3 * 8 + 2] = 0;
+
+PR_ExecuteProgram(1);
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[3 * 8 + 0]), 17.0, 0.0001, "fp.frame_written");
+ASSERT_NEAR(_PR_F32_to_F64(pr_edicts[3 * 8 + 1]),  5.1, 0.0001, "fp.nextthink_written");
+ASSERT_EQ(pr_edicts[3 * 8 + 2], 42, "fp.think_written");
+
+// Switch back to the main fixture for any further tests.
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "fp.restore_main");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================
 //
-// Pattern: re-target fn[1] to the builtin under test, set up
-// OFS_PARM0..n, run, assert OFS_RETURN + side channels.
+// Pattern: re-target fn[1] to the builtin under test, run fn[2]
+// as the entry which CALL1's into fn[1] and reads OFS_RETURN.
+// Reset stmt[1] from OP_STATE back to a builtin call shape: a=40
+// holds the function index of fn[1] (=1), c=0, builtin reads its
+// args from OFS_PARM0..n.
+
+_t_st[1].op = OP_CALL1; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 0;
+_t_st[2].op = OP_DONE;
+pr_globals[40] = 1;                              // fn index of fn[1]
 
 // #6 — break — no-op stub.
 _t_fn[1].first_statement = -6;
