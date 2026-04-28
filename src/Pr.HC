@@ -1253,6 +1253,64 @@ U0 _PR_PF_setspawnparms() {
   pr_last_builtin_called = 78;
 }
 
+// ============================================================
+// Phase 6 Batch 5 — collision / tracing (#16, #32, #34, #40, #41)
+// ============================================================
+//
+// Real Quake walks the BSP collision tree to compute trace
+// results; we don't have a map. Stubs return "no hit" defaults
+// (trace_fraction = 1.0, allsolid = startsolid = 0, endpos =
+// requested end, plane_normal = (0,0,1), trace_ent = 0=world).
+// pointcontents returns CONTENTS_EMPTY (-1). walkmove /
+// droptofloor / checkbottom return 0 (no movement / not OK).
+
+#define CONTENTS_EMPTY  -1
+
+// #16 — traceline(v1, v2, nomonsters, ignore_ent) — set the
+// trace_* result slots to "no hit, end at v2".
+U0 _PR_PF_traceline() {
+  _PR_SetFloat(OFS_GS_TRACE_ALLSOLID,   0.0);
+  _PR_SetFloat(OFS_GS_TRACE_STARTSOLID, 0.0);
+  _PR_SetFloat(OFS_GS_TRACE_FRACTION,   1.0);
+  // endpos = OFS_PARM1 (the v2 endpoint)
+  _PR_SetFloat(OFS_GS_TRACE_ENDPOS,     _PR_GetFloat(OFS_PARM1));
+  _PR_SetFloat(OFS_GS_TRACE_ENDPOS + 1, _PR_GetFloat(OFS_PARM1 + 1));
+  _PR_SetFloat(OFS_GS_TRACE_ENDPOS + 2, _PR_GetFloat(OFS_PARM1 + 2));
+  // plane_normal = up (0,0,1) — sensible default for a "no hit"
+  _PR_SetFloat(OFS_GS_TRACE_PLANE_NORMAL,     0.0);
+  _PR_SetFloat(OFS_GS_TRACE_PLANE_NORMAL + 1, 0.0);
+  _PR_SetFloat(OFS_GS_TRACE_PLANE_NORMAL + 2, 1.0);
+  _PR_SetFloat(OFS_GS_TRACE_PLANE_DIST, 0.0);
+  pr_globals[OFS_GS_TRACE_ENT]    = 0;
+  _PR_SetFloat(OFS_GS_TRACE_INOPEN,  1.0);
+  _PR_SetFloat(OFS_GS_TRACE_INWATER, 0.0);
+  pr_last_builtin_called = 16;
+}
+
+// #32 — walkmove(yaw, dist) → float (1=success, 0=blocked)
+U0 _PR_PF_walkmove() {
+  _PR_SetFloat(OFS_RETURN, 0.0);                  // blocked (no map)
+  pr_last_builtin_called = 32;
+}
+
+// #34 — droptofloor() → float (1=on floor, 0=stuck/falling)
+U0 _PR_PF_droptofloor() {
+  _PR_SetFloat(OFS_RETURN, 1.0);                  // pretend on floor
+  pr_last_builtin_called = 34;
+}
+
+// #40 — checkbottom(entity) → float (1=ok, 0=not standing on solid)
+U0 _PR_PF_checkbottom() {
+  _PR_SetFloat(OFS_RETURN, 1.0);                  // pretend ok
+  pr_last_builtin_called = 40;
+}
+
+// #41 — pointcontents(point) → float (CONTENTS_*: -1 empty, -2 solid)
+U0 _PR_PF_pointcontents() {
+  _PR_SetFloat(OFS_RETURN, CONTENTS_EMPTY);
+  pr_last_builtin_called = 41;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
@@ -1271,6 +1329,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 13: _PR_PF_vectoyaw();          break;
     case 14: _PR_PF_spawn();             break;
     case 15: _PR_PF_remove();            break;
+    case 16: _PR_PF_traceline();         break;
     case 18: _PR_PF_find();              break;
     case 19: _PR_PF_precache_sound();    break;
     case 20: _PR_PF_precache_model();    break;
@@ -1282,9 +1341,13 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 29: _PR_PF_traceon();           break;
     case 30: _PR_PF_traceoff();          break;
     case 31: _PR_PF_eprint();            break;
+    case 32: _PR_PF_walkmove();          break;
+    case 34: _PR_PF_droptofloor();       break;
     case 36: _PR_PF_rint();              break;
     case 37: _PR_PF_floor();             break;
     case 38: _PR_PF_ceil();              break;
+    case 40: _PR_PF_checkbottom();       break;
+    case 41: _PR_PF_pointcontents();     break;
     case 43: _PR_PF_fabs();              break;
     case 44: _PR_PF_aim();               break;
     case 49: _PR_PF_ChangeYaw();         break;

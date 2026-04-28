@@ -1190,6 +1190,58 @@ PR_ExecuteProgram(2);
 ASSERT_EQ(pr_last_builtin_called, 78, "PF_setspawnparms_invoked");
 
 // ============================================================
+// Phase 6 Batch 5 — collision/tracing (#16, #32, #34, #40, #41)
+// ============================================================
+
+// #16 — traceline(v1=(0,0,0), v2=(10,20,30), nomon=0, ignore=0).
+// Stub returns "no hit": fraction=1.0, endpos = v2, plane_normal up.
+_t_fn[1].first_statement = -16;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_traceline");
+_PR_SetFloat(OFS_PARM0,     0.0);
+_PR_SetFloat(OFS_PARM0 + 1, 0.0);
+_PR_SetFloat(OFS_PARM0 + 2, 0.0);
+_PR_SetFloat(OFS_PARM1,     10.0);
+_PR_SetFloat(OFS_PARM1 + 1, 20.0);
+_PR_SetFloat(OFS_PARM1 + 2, 30.0);
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 16, "PF_traceline_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_TRACE_FRACTION),  1.0, 0.0001, "PF_traceline_no_hit");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_TRACE_ENDPOS),    10.0, 0.0001, "PF_traceline_endpos_x");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_TRACE_ENDPOS + 1), 20.0, 0.0001, "PF_traceline_endpos_y");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_TRACE_ENDPOS + 2), 30.0, 0.0001, "PF_traceline_endpos_z");
+ASSERT_NEAR(_PR_GetFloat(OFS_GS_TRACE_PLANE_NORMAL + 2), 1.0, 0.0001,
+            "PF_traceline_normal_up");
+ASSERT_EQ(pr_globals[OFS_GS_TRACE_ENT], 0, "PF_traceline_ent_world");
+
+// #32 — walkmove → 0
+_t_fn[1].first_statement = -32;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_walkmove");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 32, "PF_walkmove_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 0.0, 0.0001, "PF_walkmove_returns_blocked");
+
+// #34 — droptofloor → 1
+_t_fn[1].first_statement = -34;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_droptofloor");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 34, "PF_droptofloor_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 1.0, 0.0001, "PF_droptofloor_returns_ok");
+
+// #40 — checkbottom → 1
+_t_fn[1].first_statement = -40;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_checkbottom");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 40, "PF_checkbottom_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 1.0, 0.0001, "PF_checkbottom_returns_ok");
+
+// #41 — pointcontents → CONTENTS_EMPTY (-1)
+_t_fn[1].first_statement = -41;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_pointcontents");
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 41, "PF_pointcontents_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), -1.0, 0.0001, "PF_pointcontents_empty");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================
