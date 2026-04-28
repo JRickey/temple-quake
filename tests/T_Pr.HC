@@ -693,4 +693,24 @@ _t_st[1].op = OP_NE_FNC;
 PR_ExecuteProgram(2);
 ASSERT_NEAR(_PR_GetFloat(42), 1.0, 0.0001, "OP_NE_FNC_differ");
 
+// ============================================================
+// PR_LoadProgsFromFile — disk round-trip
+// ============================================================
+//
+// Write the synthetic _t_progs buffer to disk, then load it back
+// through the file path. Verifies the FileRead → LoadProgs glue
+// preserves the header and reaches the same pr_* state we get
+// from the in-memory loader.
+
+FileWrite("::/Tmp/T_Pr_progs.dat", _t_progs, 1024);
+ASSERT_EQ(PR_LoadProgsFromFile("::/Tmp/T_Pr_progs.dat") == TRUE, 1,
+          "load_from_file_returns_true");
+ASSERT_EQ(pr_progs->version, 6, "load_from_file_version");
+ASSERT_EQ(pr_numfunctions, 3, "load_from_file_numfunctions");
+ASSERT_EQ(pr_numglobals,  64, "load_from_file_numglobals");
+
+// Bad path → returns FALSE without crashing.
+ASSERT_EQ(PR_LoadProgsFromFile("::/Tmp/no_such_file.dat") == FALSE, 1,
+          "load_from_file_missing_returns_false");
+
 TEST_SUMMARY;

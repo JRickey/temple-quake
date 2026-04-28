@@ -17,7 +17,6 @@
 //     control flow, and return-from-function
 //
 // DEFERRED:
-//   - File IO (PR_LoadProgs reading a real file from disk)
 //   - OP_STATE — needs server context (pr_global_struct->self/time)
 //   - PR_LoadStrings / PR_AllocString runtime string pool growth
 //   - SaveGame, profiling
@@ -427,6 +426,26 @@ Bool PR_LoadProgsFromBuffer(U8 *buf, I64 buflen) {
   // LittleLong per field.
 
   return TRUE;
+}
+
+// ============================================================
+// PR_LoadProgsFromFile — read a `.dat` off disk and load it.
+// ============================================================
+//
+// TempleOS's FileRead returns a heap-allocated buffer; we hand it
+// straight to PR_LoadProgsFromBuffer (which retains the pointer
+// for the lifetime of the loaded progs — every table is overlaid
+// on the buffer, not copied). Caller owns the buffer; do NOT
+// free it while the VM is live.
+
+Bool PR_LoadProgsFromFile(U8 *path) {
+  I64 size = 0;
+  U8 *buf = FileRead(path, &size);
+  if (!buf) {
+    Print("PR_LoadProgsFromFile: cannot read '%s'\n", path);
+    return FALSE;
+  }
+  return PR_LoadProgsFromBuffer(buf, size);
 }
 
 // ============================================================
