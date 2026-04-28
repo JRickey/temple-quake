@@ -649,6 +649,60 @@ U0 PR_ExecuteProgram(I64 fnum) {
         _PR_SetFloat(c, _PR_GetFloat(a) / _PR_GetFloat(b));
         break;
 
+      // ---- vector arithmetic ----
+      // Vec3 lives in three consecutive 4-byte global slots, so we
+      // address componentwise (a, a+1, a+2) — matches OP_STORE_V.
+      case OP_ADD_V:
+        _PR_SetFloat(c,     _PR_GetFloat(a)     + _PR_GetFloat(b));
+        _PR_SetFloat(c + 1, _PR_GetFloat(a + 1) + _PR_GetFloat(b + 1));
+        _PR_SetFloat(c + 2, _PR_GetFloat(a + 2) + _PR_GetFloat(b + 2));
+        break;
+      case OP_SUB_V:
+        _PR_SetFloat(c,     _PR_GetFloat(a)     - _PR_GetFloat(b));
+        _PR_SetFloat(c + 1, _PR_GetFloat(a + 1) - _PR_GetFloat(b + 1));
+        _PR_SetFloat(c + 2, _PR_GetFloat(a + 2) - _PR_GetFloat(b + 2));
+        break;
+      case OP_MUL_V:
+        // Dot product → scalar.
+        _PR_SetFloat(
+            c,
+            _PR_GetFloat(a)     * _PR_GetFloat(b)
+          + _PR_GetFloat(a + 1) * _PR_GetFloat(b + 1)
+          + _PR_GetFloat(a + 2) * _PR_GetFloat(b + 2));
+        break;
+      case OP_MUL_FV:
+        // scalar(a) * vec(b) → vec(c).
+        _PR_SetFloat(c,     _PR_GetFloat(a) * _PR_GetFloat(b));
+        _PR_SetFloat(c + 1, _PR_GetFloat(a) * _PR_GetFloat(b + 1));
+        _PR_SetFloat(c + 2, _PR_GetFloat(a) * _PR_GetFloat(b + 2));
+        break;
+      case OP_MUL_VF:
+        // vec(a) * scalar(b) → vec(c).
+        _PR_SetFloat(c,     _PR_GetFloat(a)     * _PR_GetFloat(b));
+        _PR_SetFloat(c + 1, _PR_GetFloat(a + 1) * _PR_GetFloat(b));
+        _PR_SetFloat(c + 2, _PR_GetFloat(a + 2) * _PR_GetFloat(b));
+        break;
+
+      // ---- vector compare / not ----
+      case OP_EQ_V:
+        _PR_SetFloat(c,
+            (_PR_GetFloat(a)     == _PR_GetFloat(b))
+         && (_PR_GetFloat(a + 1) == _PR_GetFloat(b + 1))
+         && (_PR_GetFloat(a + 2) == _PR_GetFloat(b + 2)));
+        break;
+      case OP_NE_V:
+        _PR_SetFloat(c,
+            (_PR_GetFloat(a)     != _PR_GetFloat(b))
+         || (_PR_GetFloat(a + 1) != _PR_GetFloat(b + 1))
+         || (_PR_GetFloat(a + 2) != _PR_GetFloat(b + 2)));
+        break;
+      case OP_NOT_V:
+        _PR_SetFloat(c,
+            (_PR_GetFloat(a)     == 0.0)
+         && (_PR_GetFloat(a + 1) == 0.0)
+         && (_PR_GetFloat(a + 2) == 0.0));
+        break;
+
       // ---- compare (float-only for MVP) ----
       case OP_EQ_F:
         _PR_SetFloat(c, _PR_GetFloat(a) == _PR_GetFloat(b));

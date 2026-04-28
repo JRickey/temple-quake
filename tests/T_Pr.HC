@@ -395,4 +395,84 @@ pr_halted = FALSE;
 PR_ExecuteProgram(2);
 ASSERT_EQ(pr_halted == TRUE, 1, "bad_builtin_index_halts");
 
+// ============================================================
+// Vector ops (ADD_V / SUB_V / MUL_V / MUL_FV / MUL_VF / EQ_V /
+// NE_V / NOT_V). Each vec3 occupies three consecutive 4-byte global
+// slots. We use globals[40..42] for `va`, [43..45] for `vb`, and
+// [46..48] for the result `vc`. Re-target fn[1] back to a regular
+// (non-builtin) function so OP_CALL is no longer involved — these
+// tests drive the entry function directly.
+// ============================================================
+_t_fn[1].first_statement = 0;                   // sentinel: fn[1] inert
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_vector_ops");
+
+// ADD_V: va + vb → vc.
+_PR_SetFloat(40, 1.0); _PR_SetFloat(41,  2.0); _PR_SetFloat(42,  3.0);
+_PR_SetFloat(43, 4.0); _PR_SetFloat(44, 10.0); _PR_SetFloat(45, 20.0);
+_PR_SetFloat(46, 0.0); _PR_SetFloat(47,  0.0); _PR_SetFloat(48,  0.0);
+_t_st[1].op = OP_ADD_V; _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+_t_st[2].op = OP_DONE;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46),  5.0, 0.0001, "OP_ADD_V_x");
+ASSERT_NEAR(_PR_GetFloat(47), 12.0, 0.0001, "OP_ADD_V_y");
+ASSERT_NEAR(_PR_GetFloat(48), 23.0, 0.0001, "OP_ADD_V_z");
+
+// SUB_V: va - vb → vc.
+_t_st[1].op = OP_SUB_V; _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46),  -3.0, 0.0001, "OP_SUB_V_x");
+ASSERT_NEAR(_PR_GetFloat(47),  -8.0, 0.0001, "OP_SUB_V_y");
+ASSERT_NEAR(_PR_GetFloat(48), -17.0, 0.0001, "OP_SUB_V_z");
+
+// MUL_V: dot product → scalar at vc.
+// va·vb = 1*4 + 2*10 + 3*20 = 4 + 20 + 60 = 84
+_t_st[1].op = OP_MUL_V; _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 84.0, 0.0001, "OP_MUL_V_dot");
+
+// MUL_FV: scalar(a) * vec(b) → vec(c). Use globals[40] = 2.5 alone.
+_PR_SetFloat(40, 2.5);
+_PR_SetFloat(43, 1.0); _PR_SetFloat(44, 2.0); _PR_SetFloat(45, 4.0);
+_t_st[1].op = OP_MUL_FV; _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46),  2.5, 0.0001, "OP_MUL_FV_x");
+ASSERT_NEAR(_PR_GetFloat(47),  5.0, 0.0001, "OP_MUL_FV_y");
+ASSERT_NEAR(_PR_GetFloat(48), 10.0, 0.0001, "OP_MUL_FV_z");
+
+// MUL_VF: vec(a) * scalar(b) → vec(c). globals[43] = 3.0.
+_PR_SetFloat(40, 1.0); _PR_SetFloat(41, 2.0); _PR_SetFloat(42, 4.0);
+_PR_SetFloat(43, 3.0);
+_t_st[1].op = OP_MUL_VF; _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46),  3.0, 0.0001, "OP_MUL_VF_x");
+ASSERT_NEAR(_PR_GetFloat(47),  6.0, 0.0001, "OP_MUL_VF_y");
+ASSERT_NEAR(_PR_GetFloat(48), 12.0, 0.0001, "OP_MUL_VF_z");
+
+// EQ_V: equal vectors → 1.0; differ in any component → 0.0.
+_PR_SetFloat(40, 1.0); _PR_SetFloat(41, 2.0); _PR_SetFloat(42, 3.0);
+_PR_SetFloat(43, 1.0); _PR_SetFloat(44, 2.0); _PR_SetFloat(45, 3.0);
+_t_st[1].op = OP_EQ_V;  _t_st[1].a = 40; _t_st[1].b = 43; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 1.0, 0.0001, "OP_EQ_V_match");
+_PR_SetFloat(45, 3.5);                          // nudge z component
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 0.0, 0.0001, "OP_EQ_V_differ");
+
+// NE_V: differs in any component → 1.0.
+_t_st[1].op = OP_NE_V;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 1.0, 0.0001, "OP_NE_V_differ");
+_PR_SetFloat(45, 3.0);                          // restore equality
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 0.0, 0.0001, "OP_NE_V_match");
+
+// NOT_V: all zero → 1.0; any nonzero → 0.0.
+_PR_SetFloat(40, 0.0); _PR_SetFloat(41, 0.0); _PR_SetFloat(42, 0.0);
+_t_st[1].op = OP_NOT_V; _t_st[1].a = 40; _t_st[1].b = 0; _t_st[1].c = 46;
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 1.0, 0.0001, "OP_NOT_V_zero_vec");
+_PR_SetFloat(41, 1.0);                          // make y nonzero
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(46), 0.0, 0.0001, "OP_NOT_V_nonzero_vec");
+
 TEST_SUMMARY;
