@@ -441,6 +441,56 @@ F64 _PR_atan2(F64 y, F64 x) {
 }
 
 // ============================================================
+// PR_InjectChunk / PR_InjectFinish — host → VM file transfer.
+// ============================================================
+//
+// The TempleOS daemon receives HolyC source over COM2 and ExePutS
+// it. There's no native binary file transfer mechanism. To get a
+// real `qwprogs.dat` into the VM filesystem, the host streams it
+// in hex-encoded chunks via daemon-pushed source: each chunk is a
+// `PR_InjectChunk("AABBCC...", offset, nbytes);` statement that
+// decodes 2 hex chars per byte into the static `_pr_inject_buf`.
+// Once all chunks land, `PR_InjectFinish(path)` writes the buffer
+// to disk via TempleOS's FileWrite.
+//
+// Buffer is 256 KB — covers vanilla Quake (~200 KB) and
+// QuakeWorld (~200 KB) progs.dat with headroom.
+
+U8  _pr_inject_buf[262144];
+I64 _pr_inject_len = 0;
+
+I64 _PR_HexNibble(U8 c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return c - 'a' + 10;
+  }
+  if (c >= 'A' && c <= 'F') {
+    return c - 'A' + 10;
+  }
+  return 0;
+}
+
+U0 PR_InjectChunk(U8 *hex, I64 offset, I64 nbytes) {
+  I64 i;
+  for (i = 0; i < nbytes; i++) {
+    U8 hi = _PR_HexNibble(hex[i * 2]);
+    U8 lo = _PR_HexNibble(hex[i * 2 + 1]);
+    _pr_inject_buf[offset + i] = (hi << 4) | lo;
+  }
+  if (offset + nbytes > _pr_inject_len) {
+    _pr_inject_len = offset + nbytes;
+  }
+}
+
+Bool PR_InjectFinish(U8 *path) {
+  Bool ok = FileWrite(path, _pr_inject_buf, _pr_inject_len);
+  _pr_inject_len = 0;
+  return ok;
+}
+
+// ============================================================
 // PR_LoadProgsFromBuffer — header validation + endian fix-up.
 // ============================================================
 //
