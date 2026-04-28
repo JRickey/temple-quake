@@ -1242,6 +1242,72 @@ ASSERT_EQ(pr_last_builtin_called, 41, "PF_pointcontents_invoked");
 ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), -1.0, 0.0001, "PF_pointcontents_empty");
 
 // ============================================================
+// Phase 6 Batch 6 — cvar/console (#21, #45, #46, #72, #80)
+// ============================================================
+// Register a real cvar so #45 cvar() returns a known value, and
+// #72 cvar_set() can update it. Add "tv\0" at offsets 18..20 of
+// _t_str (we reserved 32 bytes of strings region) and bump
+// numstrings.
+_t_str = _t_progs + _t_hdr->ofs_strings;
+_t_str[18] = 't'; _t_str[19] = 'v'; _t_str[20] = 0;
+_t_hdr->numstrings = 21;
+
+cvar_t _t_cv = {"tv", "42", FALSE, FALSE, 0.0, NULL};
+Cvar_RegisterVariable(&_t_cv);
+
+// #45 — cvar("tv") → 42.0
+_t_fn[1].first_statement = -45;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_cvar");
+pr_globals[OFS_PARM0] = 18;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 45, "PF_cvar_invoked");
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 42.0, 0.0001, "PF_cvar_returns_value");
+// Unknown name → 0.0
+pr_globals[OFS_PARM0] = 1;                       // "entry" — not a cvar
+PR_ExecuteProgram(2);
+ASSERT_NEAR(_PR_GetFloat(OFS_RETURN), 0.0, 0.0001, "PF_cvar_unknown_zero");
+
+// #72 — cvar_set("tv", "entry") — sets tv's string to "entry";
+// numeric value becomes Q_atof("entry") = 0.0
+_t_fn[1].first_statement = -72;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_cvar_set");
+pr_globals[OFS_PARM0] = 18;                      // "tv"
+pr_globals[OFS_PARM1] = 1;                       // "entry"
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 72, "PF_cvar_set_invoked");
+ASSERT_NEAR(Cvar_VariableValue("tv"), 0.0, 0.0001, "PF_cvar_set_updated");
+
+// #21 — stuffcmd(client=3, "Hello QC!")
+_t_fn[1].first_statement = -21;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_stuffcmd");
+pr_globals[OFS_PARM0] = 3;
+pr_globals[OFS_PARM1] = 7;                       // "Hello QC!"
+pr_last_stuffcmd_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 21, "PF_stuffcmd_invoked");
+ASSERT_EQ(pr_last_stuffcmd_client, 3, "PF_stuffcmd_client");
+ASSERT_EQ(Q_strcmp(pr_last_stuffcmd_str, "Hello QC!"), 0, "PF_stuffcmd_payload");
+
+// #46 — localcmd("Hello QC!")
+_t_fn[1].first_statement = -46;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_localcmd");
+pr_globals[OFS_PARM0] = 7;
+pr_last_localcmd_str[0] = 0;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 46, "PF_localcmd_invoked");
+ASSERT_EQ(Q_strcmp(pr_last_localcmd_str, "Hello QC!"), 0, "PF_localcmd_payload");
+
+// #80 — infokey(client, key) → "" (offset 0)
+_t_fn[1].first_statement = -80;
+ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_infokey");
+pr_globals[OFS_PARM0] = 1;
+pr_globals[OFS_PARM1] = 18;
+pr_globals[OFS_RETURN] = 999;
+PR_ExecuteProgram(2);
+ASSERT_EQ(pr_last_builtin_called, 80, "PF_infokey_invoked");
+ASSERT_EQ(pr_globals[OFS_RETURN], 0, "PF_infokey_returns_null_string");
+
+// ============================================================
 // Tier 2 builtins — math/utility (#9, #12, #13, #36, #37, #38,
 // #43, #51) and stub recorders (#6, #19, #20).
 // ============================================================

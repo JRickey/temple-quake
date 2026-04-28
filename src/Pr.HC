@@ -1311,6 +1311,61 @@ U0 _PR_PF_pointcontents() {
   pr_last_builtin_called = 41;
 }
 
+// ============================================================
+// Phase 6 Batch 6 — cvar/console (#21, #45, #46, #72, #80)
+// ============================================================
+//
+// cvar / cvar_set delegate to the existing Cvar_VariableValue /
+// Cvar_Set in Cvar.HC. stuffcmd / localcmd / infokey are
+// recordable stubs — real Quake queues network messages or
+// console commands; for VM-side bytecode validation we just
+// capture (client, payload) into pr_last_console_*.
+
+I64 pr_last_stuffcmd_client = 0;
+U8  pr_last_stuffcmd_str[256];
+U8  pr_last_localcmd_str[256];
+
+// #21 — stuffcmd(client, string) — record dispatch + payload.
+U0 _PR_PF_stuffcmd() {
+  pr_last_stuffcmd_client = pr_globals[OFS_PARM0];
+  I64 strofs = pr_globals[OFS_PARM1];
+  Q_strncpy(pr_last_stuffcmd_str, _PR_GetString(strofs), 255);
+  pr_last_stuffcmd_str[255] = 0;
+  pr_last_builtin_called = 21;
+}
+
+// #45 — cvar(string name) → float
+U0 _PR_PF_cvar() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  U8 *name = _PR_GetString(strofs);
+  _PR_SetFloat(OFS_RETURN, Cvar_VariableValue(name));
+  pr_last_builtin_called = 45;
+}
+
+// #46 — localcmd(string) — append a server console command.
+U0 _PR_PF_localcmd() {
+  I64 strofs = pr_globals[OFS_PARM0];
+  Q_strncpy(pr_last_localcmd_str, _PR_GetString(strofs), 255);
+  pr_last_localcmd_str[255] = 0;
+  pr_last_builtin_called = 46;
+}
+
+// #72 — cvar_set(name_str, value_str) — delegate to Cvar_Set.
+U0 _PR_PF_cvar_set() {
+  I64 nofs = pr_globals[OFS_PARM0];
+  I64 vofs = pr_globals[OFS_PARM1];
+  Cvar_Set(_PR_GetString(nofs), _PR_GetString(vofs));
+  pr_last_builtin_called = 72;
+}
+
+// #80 — infokey(client, keyname) → string. Real Quake parses the
+// client's userinfo string. We have no client state; return the
+// null string (offset 0).
+U0 _PR_PF_infokey() {
+  pr_globals[OFS_RETURN] = 0;
+  pr_last_builtin_called = 80;
+}
+
 // Builtin dispatch — invoked when a function call hits a
 // dfunction_t with first_statement < 0. The negation is the
 // builtin index.
@@ -1333,6 +1388,7 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 18: _PR_PF_find();              break;
     case 19: _PR_PF_precache_sound();    break;
     case 20: _PR_PF_precache_model();    break;
+    case 21: _PR_PF_stuffcmd();          break;
     case 22: _PR_PF_findradius();        break;
     case 25: _PR_PF_dprint();            break;
     case 26: _PR_PF_ftos();              break;
@@ -1350,6 +1406,8 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 41: _PR_PF_pointcontents();     break;
     case 43: _PR_PF_fabs();              break;
     case 44: _PR_PF_aim();               break;
+    case 45: _PR_PF_cvar();              break;
+    case 46: _PR_PF_localcmd();          break;
     case 49: _PR_PF_ChangeYaw();         break;
     case 51: _PR_PF_vectoangles();       break;
     case 52: _PR_PF_WriteByte();         break;
@@ -1362,11 +1420,13 @@ U0 _PR_DispatchBuiltin(I64 idx) {
     case 59: _PR_PF_WriteEntity();       break;
     case 68: _PR_PF_precache_file();     break;
     case 69: _PR_PF_makestatic();        break;
+    case 72: _PR_PF_cvar_set();          break;
     case 74: _PR_PF_ambientsound();      break;
     case 75: _PR_PF_precache_model2();   break;
     case 76: _PR_PF_precache_sound2();   break;
     case 77: _PR_PF_precache_file2();    break;
     case 78: _PR_PF_setspawnparms();     break;
+    case 80: _PR_PF_infokey();           break;
     case 81: _PR_PF_stof();              break;
     default:
       Print("PR: builtin #%d not installed\n", idx);
