@@ -1179,23 +1179,25 @@ U0 _PR_PF_setmodel() {
 }
 
 // #4 — setsize(entity, vec3 mins, vec3 maxs) — write mins/maxs
-// fields and recompute size as (maxs - mins).
+// fields and recompute size as (maxs - mins). HolyC's PrsType
+// shares scope across if-bodies (similar to its switch-case
+// quirk), so the per-block `I64 b_*` names must all differ.
 U0 _PR_PF_setsize() {
   I64 ent  = pr_globals[OFS_PARM0];
   I64 omn  = _PR_FieldOfsByName("mins");
   I64 omx  = _PR_FieldOfsByName("maxs");
   I64 osz  = _PR_FieldOfsByName("size");
   if (omn >= 0) {
-    I64 b = _PR_EdictFieldSlot(ent, omn);
-    pr_edicts[b]     = pr_globals[OFS_PARM1];
-    pr_edicts[b + 1] = pr_globals[OFS_PARM1 + 1];
-    pr_edicts[b + 2] = pr_globals[OFS_PARM1 + 2];
+    I64 b_mn = _PR_EdictFieldSlot(ent, omn);
+    pr_edicts[b_mn]     = pr_globals[OFS_PARM1];
+    pr_edicts[b_mn + 1] = pr_globals[OFS_PARM1 + 1];
+    pr_edicts[b_mn + 2] = pr_globals[OFS_PARM1 + 2];
   }
   if (omx >= 0) {
-    I64 b = _PR_EdictFieldSlot(ent, omx);
-    pr_edicts[b]     = pr_globals[OFS_PARM2];
-    pr_edicts[b + 1] = pr_globals[OFS_PARM2 + 1];
-    pr_edicts[b + 2] = pr_globals[OFS_PARM2 + 2];
+    I64 b_mx = _PR_EdictFieldSlot(ent, omx);
+    pr_edicts[b_mx]     = pr_globals[OFS_PARM2];
+    pr_edicts[b_mx + 1] = pr_globals[OFS_PARM2 + 1];
+    pr_edicts[b_mx + 2] = pr_globals[OFS_PARM2 + 2];
   }
   if (osz >= 0) {
     F64 mnx = _PR_GetFloat(OFS_PARM1);
@@ -1204,10 +1206,10 @@ U0 _PR_PF_setsize() {
     F64 mxx = _PR_GetFloat(OFS_PARM2);
     F64 mxy = _PR_GetFloat(OFS_PARM2 + 1);
     F64 mxz = _PR_GetFloat(OFS_PARM2 + 2);
-    I64 b = _PR_EdictFieldSlot(ent, osz);
-    pr_edicts[b]     = _PR_F64_to_F32(mxx - mnx);
-    pr_edicts[b + 1] = _PR_F64_to_F32(mxy - mny);
-    pr_edicts[b + 2] = _PR_F64_to_F32(mxz - mnz);
+    I64 b_sz = _PR_EdictFieldSlot(ent, osz);
+    pr_edicts[b_sz]     = _PR_F64_to_F32(mxx - mnx);
+    pr_edicts[b_sz + 1] = _PR_F64_to_F32(mxy - mny);
+    pr_edicts[b_sz + 2] = _PR_F64_to_F32(mxz - mnz);
   }
   pr_last_builtin_called = 4;
 }

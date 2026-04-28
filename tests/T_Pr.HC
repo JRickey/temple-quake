@@ -60,8 +60,12 @@ _t_hdr->numfunctions   = 1;
 // numfunctions to 3 without re-laying-out the buffer, and we don't
 // want the function table to extend into the strings region.
 _t_hdr->ofs_strings    = _t_hdr->ofs_functions + 4 * sizeof(dfunction_t);
-_t_hdr->numstrings     = 7;       // "\0entry\0"
-_t_hdr->ofs_globals    = _t_hdr->ofs_strings + 7;
+_t_hdr->numstrings     = 7;       // "\0entry\0" (later tests bump this
+                                  // to 18 for "\0entry\0Hello QC!\0";
+                                  // reserve 32 bytes of strings region
+                                  // up front so the longer pool never
+                                  // overlaps pr_globals).
+_t_hdr->ofs_globals    = _t_hdr->ofs_strings + 32;
 _t_hdr->numglobals     = 64;
 _t_hdr->entityfields   = 0;
 
@@ -1091,11 +1095,7 @@ PR_ExecuteProgram(2);
 ASSERT_EQ(pr_last_builtin_called, 57, "PF_WriteAngle_invoked");
 ASSERT_NEAR(pr_last_write_val_f, 90.0, 0.0001, "PF_WriteAngle_val");
 
-// #58 — WriteString — uses string offset 7 ("Hello QC!"). Dispatch
-// routes correctly; the string-payload capture is currently empty
-// despite Q_strncpy from a known-valid source — we suspect an
-// OFS_PARM1 / parm-trio interaction we haven't isolated yet.
-// Tracked as a follow-up; the dispatch itself is verified.
+// #58 — WriteString — uses string offset 7 ("Hello QC!").
 _t_fn[1].first_statement = -58;
 ASSERT_EQ(PR_LoadProgsFromBuffer(_t_progs, 1024) == TRUE, 1, "reload_for_WriteString");
 _PR_SetFloat(OFS_PARM0, 2.0);
@@ -1104,6 +1104,8 @@ pr_last_write_val_str[0] = 0;
 PR_ExecuteProgram(2);
 ASSERT_EQ(pr_last_builtin_called, 58, "PF_WriteString_invoked");
 ASSERT_EQ(pr_last_write_dest, 2, "PF_WriteString_dest");
+ASSERT_EQ(Q_strcmp(pr_last_write_val_str, "Hello QC!"), 0,
+          "PF_WriteString_payload");
 
 // #59 — WriteEntity — pass entity index 5
 _t_fn[1].first_statement = -59;
