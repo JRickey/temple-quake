@@ -130,19 +130,40 @@ U8 Render_Quantize(U8 qpal) {
 // scaling) — Quake's 320×200 fits comfortably in the upper-left
 // quadrant of TempleOS's 640×480.
 //
-// Per-pixel GrPlot0 with direct dc->color writes is slow
-// (~64k iterations per frame). Acceptable for first-light
-// validation; the surface drawer's hot loop will later write
-// straight into `gr.dc->body` instead. TempleOS color setter
-// is a plain field assignment, not a function call.
+// Direct write into `gr.dc->body` (the screen DC's pixel buffer).
+// Each row is `gr.dc->width_internal` bytes wide (8-aligned per
+// TempleOS's qword fill); pixels are 4-bit-packed as palette
+// indices. Phase 9.1's per-pixel GrPlot0 path was ~20s for one
+// frame; this is microseconds.
+//
+// Clips against the live DC bounds so out-of-screen draws don't
+// corrupt adjacent memory. If the DC is smaller than 320x200
+// (unlikely on the standard 640x480 screen) we draw the visible
+// portion.
 U0 Render_Flush(I64 dst_x, I64 dst_y) {
+  I64 stride  = gr.dc->width_internal;
+  I64 dc_w    = gr.dc->width;
+  I64 dc_h    = gr.dc->height;
+  U8  *body   = gr.dc->body;
+  // Clip rect against the DC.
+  I64 src_x0 = 0;
+  I64 src_y0 = 0;
+  I64 src_x1 = RENDER_W;
+  I64 src_y1 = RENDER_H;
+  if (dst_x < 0)             { src_x0 = -dst_x; }
+  if (dst_y < 0)             { src_y0 = -dst_y; }
+  if (dst_x + RENDER_W > dc_w) { src_x1 = dc_w - dst_x; }
+  if (dst_y + RENDER_H > dc_h) { src_y1 = dc_h - dst_y; }
+  if (src_x0 >= src_x1 || src_y0 >= src_y1) {
+    return;
+  }
   I64 row;
   I64 col;
-  for (row = 0; row < RENDER_H; row++) {
-    for (col = 0; col < RENDER_W; col++) {
-      U8 qcol = render_buf[row * RENDER_W + col];
-      gr.dc->color = Render_Quantize(qcol);
-      GrPlot0(gr.dc, dst_x + col, dst_y + row);
+  for (row = src_y0; row < src_y1; row++) {
+    U8 *src_row = render_buf + row * RENDER_W;
+    U8 *dst_row = body + (dst_y + row) * stride + dst_x;
+    for (col = src_x0; col < src_x1; col++) {
+      dst_row[col] = Render_Quantize(src_row[col]);
     }
   }
 }
