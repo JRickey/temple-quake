@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """Inject a binary file into the running TempleOS VM via the daemon.
 
-The daemon accepts HolyC source over COM2 and ExePutS it. To get
-binary data in, this script reads a local file, hex-encodes each
-byte (2 chars), and pushes batches of `PR_InjectChunk(hex, off, n);`
-statements through `scripts/send.py`. After the last byte lands,
-`PR_InjectFinish(vm_path);` writes the buffer to disk via
-TempleOS's FileWrite.
+Pushes hex-encoded `PR_InjectChunk(...)` statements over the
+daemon's COM2 socket — much faster than typing each char via the
+QEMU monitor. Requires:
 
-Pre-requisites:
-- VM up and daemon running (`make dev-temple` then daemon types
-  `D_OK` to COM1).
-- src/Pr.HC pushed (provides _pr_inject_buf + PR_InjectChunk +
-  PR_InjectFinish).
+  * VM up (`make dev-temple`)
+  * `src/Pr.HC` already pushed (provides PR_InjectChunk +
+    PR_InjectFinish + _pr_inject_buf)
+  * Daemon listening on COM2 (use `scripts/daemon-up.py` to bring
+    it back if `temple-run.py --launch=""` exited it)
 
 Usage:
     scripts/inject-progs.py <local-path> <vm-path>
@@ -21,22 +18,53 @@ Usage:
 from __future__ import annotations
 
 import os
-import subprocess
+import socket
 import sys
+import time
 from pathlib import Path
 
-# Bytes of binary per PR_InjectChunk call. Each chunk emits ~2*N
-# chars of hex + ~50 chars overhead. 4 KB binary → ~8 KB hex per
-# call, comfortably under the daemon's COM2 line buffer.
-CHUNK = 4096
+REPO = Path(__file__).resolve().parent.parent
+COM2 = Path(os.environ.get(
+    "COM2_SOCK", REPO / "devkit" / "build" / "com2-temple.sock"))
+LOG = Path(os.environ.get(
+    "SERIAL_LOG", REPO / "devkit" / "build" / "serial-temple.log"))
 
-# How many PR_InjectChunk calls to bundle per send.py invocation.
-# More calls per push = fewer round-trips but bigger source.
-# 8 calls → ~64 KB of source per push, ~32 KB of binary.
+# 4 KB binary per PR_InjectChunk → 8 KB hex per call
+CHUNK = 4096
+# Bundle 8 calls per COM2 push for throughput
 CALLS_PER_PUSH = 8
 
-REPO = Path(__file__).resolve().parent.parent
-SEND = REPO / "devkit" / "scripts" / "send.py"
+
+def log_size() -> int:
+    try:
+        return LOG.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
+def push_chunk(payload: bytes) -> None:
+    """Send raw bytes to COM2, then EOT (mirrors temple-run.py)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(str(COM2))
+        for i in range(0, len(payload), 1024):
+            s.sendall(payload[i:i + 1024])
+            time.sleep(0.01)
+        s.sendall(b"\x04")
+
+
+def wait_for_token(token: str, since: int, timeout: float = 30.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with LOG.open("rb") as f:
+                f.seek(since)
+                data = f.read()
+                if token.encode() in data:
+                    return True
+        except FileNotFoundError:
+            pass
+        time.sleep(0.1)
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -48,6 +76,11 @@ def main(argv: list[str]) -> int:
     if not src.exists():
         print(f"error: {src} not found", file=sys.stderr)
         return 2
+    if not COM2.exists():
+        print(f"error: COM2 socket {COM2} not found — VM not up?",
+              file=sys.stderr)
+        return 1
+
     data = src.read_bytes()
     n_bytes = len(data)
     n_chunks = (n_bytes + CHUNK - 1) // CHUNK
@@ -58,39 +91,40 @@ def main(argv: list[str]) -> int:
 
     chunk_idx = 0
     for push_i in range(n_pushes):
-        # Build a single source string with up to CALLS_PER_PUSH
-        # PR_InjectChunk statements. Each statement runs in the
-        # daemon's ExePutS pass.
         stmts = []
         for _ in range(CALLS_PER_PUSH):
             if chunk_idx >= n_chunks:
                 break
             offset = chunk_idx * CHUNK
             chunk = data[offset:offset + CHUNK]
-            hex_str = chunk.hex()
             stmts.append(
-                f'PR_InjectChunk("{hex_str}",{offset},{len(chunk)});')
+                f'PR_InjectChunk("{chunk.hex()}",{offset},'
+                f'{len(chunk)});')
             chunk_idx += 1
-        source = "".join(stmts)
-        rc = subprocess.run(
-            [str(SEND), source, "--enter", "--delay", "0.001"],
-            check=False,
-        )
-        if rc.returncode != 0:
-            print(f"error: send.py failed at push {push_i+1}",
+        # The daemon ExePutS each pushed chunk and emits D_DONE.
+        # Wait for it before sending the next batch so the FIFO
+        # doesn't overflow.
+        since = log_size()
+        push_chunk("".join(stmts).encode())
+        if not wait_for_token("D_DONE", since, timeout=60.0):
+            print(f"!! timeout on push {push_i+1}/{n_pushes}",
                   file=sys.stderr)
             return 1
-        print(f"  push {push_i+1}/{n_pushes} ({chunk_idx}/{n_chunks} "
-              f"chunks, {chunk_idx*CHUNK:,} B)", flush=True)
+        print(f"  push {push_i+1}/{n_pushes} "
+              f"({chunk_idx}/{n_chunks}, {chunk_idx*CHUNK:,} B)",
+              flush=True)
 
-    # Flush the buffer to disk on the VM.
-    flush = f'if (PR_InjectFinish("{dst}")) {{ "INJECT_OK\\n"; }} else {{ "INJECT_FAIL\\n"; }}'
-    rc = subprocess.run(
-        [str(SEND), flush, "--enter", "--delay", "0.001"],
-        check=False,
+    # Flush + verify
+    since = log_size()
+    flush = (
+        f'CommPrint(1,"INJECT_BEGIN\\n");'
+        f'if (PR_InjectFinish("{dst}")) {{ '
+        f'CommPrint(1,"INJECT_OK\\n"); }} else {{ '
+        f'CommPrint(1,"INJECT_FAIL\\n"); }}'
     )
-    if rc.returncode != 0:
-        print("error: flush failed", file=sys.stderr)
+    push_chunk(flush.encode())
+    if not wait_for_token("INJECT_OK", since, timeout=30.0):
+        print("!! INJECT_OK not seen after flush", file=sys.stderr)
         return 1
     print(f"flushed → {dst}")
     return 0
