@@ -113,3 +113,36 @@ U0 Render_HLine(I64 x, I64 y, I64 len, U8 color) {
   }
   Q_memset(render_buf + y * RENDER_W + x0, color, x1 - x0);
 }
+
+// Quantize a Quake palette index (0..255) to a TempleOS color
+// (0..15). Phase 9.1 ships a crude `low 4 bits` mapping —
+// enough to put visible pixels on screen and validate the
+// transport. A real palette-aware nearest-RGB quantization will
+// land in 9.1.5 once we host-side-generate the table from the
+// actual gfx/palette.lmp the engine ships.
+U8 Render_Quantize(U8 qpal) {
+  return qpal & 0xF;
+}
+
+// Blit `render_buf` to TempleOS's screen DC at top-left
+// (dst_x, dst_y). Clips to (0,0) bottom-right against
+// GR_WIDTH=640, GR_HEIGHT=480. One-to-one pixel mapping (no
+// scaling) — Quake's 320×200 fits comfortably in the upper-left
+// quadrant of TempleOS's 640×480.
+//
+// Per-pixel GrPlot0 with direct dc->color writes is slow
+// (~64k iterations per frame). Acceptable for first-light
+// validation; the surface drawer's hot loop will later write
+// straight into `gr.dc->body` instead. TempleOS color setter
+// is a plain field assignment, not a function call.
+U0 Render_Flush(I64 dst_x, I64 dst_y) {
+  I64 row;
+  I64 col;
+  for (row = 0; row < RENDER_H; row++) {
+    for (col = 0; col < RENDER_W; col++) {
+      U8 qcol = render_buf[row * RENDER_W + col];
+      gr.dc->color = Render_Quantize(qcol);
+      GrPlot0(gr.dc, dst_x + col, dst_y + row);
+    }
+  }
+}
