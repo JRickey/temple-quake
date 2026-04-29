@@ -198,3 +198,92 @@ for (_q_idx = 0; _q_idx < 256; _q_idx++) {
   }
 }
 ASSERT_EQ(_q_in_range == TRUE, 1, "quant.all_entries_in_range");
+
+// ---- Texture sampling ----
+//
+// Build a tiny 4×4 checkerboard: idx 1 in the top-left 2×2,
+// idx 2 elsewhere — pattern visible at sample sites.
+//
+//   1 1 2 2
+//   1 1 2 2
+//   2 2 1 1
+//   2 2 1 1
+
+U8 _tex_body[16];
+_tex_body[0]  = 1; _tex_body[1]  = 1; _tex_body[2]  = 2; _tex_body[3]  = 2;
+_tex_body[4]  = 1; _tex_body[5]  = 1; _tex_body[6]  = 2; _tex_body[7]  = 2;
+_tex_body[8]  = 2; _tex_body[9]  = 2; _tex_body[10] = 1; _tex_body[11] = 1;
+_tex_body[12] = 2; _tex_body[13] = 2; _tex_body[14] = 1; _tex_body[15] = 1;
+
+texture_t _t;
+_t.width  = 4;
+_t.height = 4;
+_t.body   = _tex_body;
+
+// Direct samples within bounds
+ASSERT_EQ(Render_TextureSample(&_t, 0, 0), 1, "tex.sample_0_0");
+ASSERT_EQ(Render_TextureSample(&_t, 1, 1), 1, "tex.sample_1_1");
+ASSERT_EQ(Render_TextureSample(&_t, 2, 0), 2, "tex.sample_2_0");
+ASSERT_EQ(Render_TextureSample(&_t, 3, 3), 1, "tex.sample_3_3");
+
+// Wrapping: u=4 wraps to 0
+ASSERT_EQ(Render_TextureSample(&_t, 4, 0),  1, "tex.sample_wrap_u4");
+ASSERT_EQ(Render_TextureSample(&_t, 5, 1),  1, "tex.sample_wrap_u5_v1");
+// Negative wraps too
+ASSERT_EQ(Render_TextureSample(&_t, -1, 0), 2, "tex.sample_wrap_uneg1");
+// Big u: 100 % 4 = 0 → idx 1 at (0, 0)
+ASSERT_EQ(Render_TextureSample(&_t, 100, 100), 1, "tex.sample_wrap_big");
+
+// ---- BlitTexture (1:1) ----
+
+Render_Init();
+Render_BlitTexture(&_t, 50, 30);
+// Top-left of texture lands at (50, 30)
+ASSERT_EQ(Render_GetPixel(50, 30), 1, "tex.blit_topleft");
+ASSERT_EQ(Render_GetPixel(53, 33), 1, "tex.blit_botright");
+ASSERT_EQ(Render_GetPixel(52, 30), 2, "tex.blit_inside_idx2");
+// Outside the blit rect — buffer remains 0
+ASSERT_EQ(Render_GetPixel(54, 30), 0, "tex.blit_one_past_right");
+ASSERT_EQ(Render_GetPixel(50, 34), 0, "tex.blit_one_past_bot");
+ASSERT_EQ(Render_GetPixel(49, 30), 0, "tex.blit_one_before_left");
+
+// Clip on left/top (negative offset)
+Render_Init();
+Render_BlitTexture(&_t, -2, -1);
+// Texture origin clipped: only the bottom-right 2×3 portion drawn
+ASSERT_EQ(Render_GetPixel(0, 0),  2, "tex.blit_clip_topleft");
+ASSERT_EQ(Render_GetPixel(1, 2),  1, "tex.blit_clip_inside");
+
+// Off-screen entirely → no-op
+Render_Init();
+Render_BlitTexture(&_t, RENDER_W + 5, 0);
+ASSERT_EQ(Render_GetPixel(RENDER_W - 1, 0), 0, "tex.blit_offscreen_noop");
+
+// ---- BlitTextureScaled ----
+
+// Scale 4×4 → 8×8 (2x). Each source pixel doubles.
+Render_Init();
+Render_BlitTextureScaled(&_t, 100, 100, 8, 8);
+// (100,100) and (101,100) sample tex (0,0) = 1
+ASSERT_EQ(Render_GetPixel(100, 100), 1, "tex.scaled_2x_topleft");
+ASSERT_EQ(Render_GetPixel(101, 100), 1, "tex.scaled_2x_topleft_dup");
+// (104,100) samples tex (2,0) = 2
+ASSERT_EQ(Render_GetPixel(104, 100), 2, "tex.scaled_2x_idx2");
+// (107,107) samples tex (3,3) = 1
+ASSERT_EQ(Render_GetPixel(107, 107), 1, "tex.scaled_2x_botright");
+// One past the rect — untouched
+ASSERT_EQ(Render_GetPixel(108, 107), 0, "tex.scaled_2x_past_right");
+
+// Scale 4×4 → 2×2 (downscale). Sub-sampled.
+Render_Init();
+Render_BlitTextureScaled(&_t, 200, 100, 2, 2);
+// (200,100) samples tex (0,0) = 1; (201,100) samples tex (2,0) = 2
+ASSERT_EQ(Render_GetPixel(200, 100), 1, "tex.scaled_half_topleft");
+ASSERT_EQ(Render_GetPixel(201, 100), 2, "tex.scaled_half_topright");
+
+// Zero-size → no-op
+Render_Init();
+Render_BlitTextureScaled(&_t, 50, 50, 0, 10);
+ASSERT_EQ(Render_GetPixel(50, 50), 0, "tex.scaled_zero_w_noop");
+Render_BlitTextureScaled(&_t, 50, 50, 10, 0);
+ASSERT_EQ(Render_GetPixel(50, 50), 0, "tex.scaled_zero_h_noop");
