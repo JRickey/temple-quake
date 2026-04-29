@@ -98,3 +98,72 @@ Render_HLine(0, -1,        50, 0xCC);
 Render_HLine(0, RENDER_H,  50, 0xCC);
 ASSERT_EQ(Render_GetPixel(0, 0), 0,           "render.hline_oob_top_noop");
 ASSERT_EQ(Render_GetPixel(0, RENDER_H - 1), 0, "render.hline_oob_bot_noop");
+
+// ---- Bresenham line drawer ----
+
+// Horizontal line: same as HLine
+Render_Init();
+Render_Line(10, 50, 20, 50, 0x42);
+ASSERT_EQ(Render_GetPixel(10, 50), 0x42, "render.line_horiz_left");
+ASSERT_EQ(Render_GetPixel(15, 50), 0x42, "render.line_horiz_mid");
+ASSERT_EQ(Render_GetPixel(20, 50), 0x42, "render.line_horiz_right");
+ASSERT_EQ(Render_GetPixel(21, 50), 0,    "render.line_horiz_one_past");
+ASSERT_EQ(Render_GetPixel(10, 51), 0,    "render.line_horiz_row_below");
+
+// Vertical line
+Render_Init();
+Render_Line(100, 20, 100, 30, 0x55);
+ASSERT_EQ(Render_GetPixel(100, 20), 0x55, "render.line_vert_top");
+ASSERT_EQ(Render_GetPixel(100, 25), 0x55, "render.line_vert_mid");
+ASSERT_EQ(Render_GetPixel(100, 30), 0x55, "render.line_vert_bot");
+ASSERT_EQ(Render_GetPixel(101, 25), 0,    "render.line_vert_col_right");
+
+// Diagonal (45°): every step advances both x and y
+Render_Init();
+Render_Line(0, 0, 10, 10, 0x77);
+ASSERT_EQ(Render_GetPixel(0,  0),  0x77, "render.line_diag_start");
+ASSERT_EQ(Render_GetPixel(5,  5),  0x77, "render.line_diag_mid");
+ASSERT_EQ(Render_GetPixel(10, 10), 0x77, "render.line_diag_end");
+ASSERT_EQ(Render_GetPixel(11, 11), 0,    "render.line_diag_one_past");
+// Off-diagonal pixels untouched
+ASSERT_EQ(Render_GetPixel(1, 0),  0, "render.line_diag_off");
+ASSERT_EQ(Render_GetPixel(0, 1),  0, "render.line_diag_off2");
+
+// Reverse direction (right-to-left + bottom-to-top)
+Render_Init();
+Render_Line(20, 20, 10, 10, 0x88);
+ASSERT_EQ(Render_GetPixel(20, 20), 0x88, "render.line_reverse_start");
+ASSERT_EQ(Render_GetPixel(15, 15), 0x88, "render.line_reverse_mid");
+ASSERT_EQ(Render_GetPixel(10, 10), 0x88, "render.line_reverse_end");
+
+// Shallow slope (more horizontal than vertical)
+Render_Init();
+Render_Line(0, 0, 20, 5, 0x99);
+ASSERT_EQ(Render_GetPixel(0,  0), 0x99, "render.line_shallow_start");
+ASSERT_EQ(Render_GetPixel(20, 5), 0x99, "render.line_shallow_end");
+// Bresenham takes 21 steps; verify a midpoint
+ASSERT_EQ(Render_GetPixel(10, 2), 0x99, "render.line_shallow_mid");
+
+// Steep slope (more vertical than horizontal)
+Render_Init();
+Render_Line(0, 0, 5, 20, 0xAA);
+ASSERT_EQ(Render_GetPixel(0, 0),  0xAA, "render.line_steep_start");
+ASSERT_EQ(Render_GetPixel(5, 20), 0xAA, "render.line_steep_end");
+ASSERT_EQ(Render_GetPixel(2, 10), 0xAA, "render.line_steep_mid");
+
+// Single-pixel "line" (degenerate)
+Render_Init();
+Render_Line(50, 50, 50, 50, 0xBB);
+ASSERT_EQ(Render_GetPixel(50, 50), 0xBB, "render.line_degenerate");
+ASSERT_EQ(Render_GetPixel(51, 50), 0,    "render.line_degenerate_no_extra");
+
+// Off-screen endpoint clipped via Render_PutPixel; in-bounds portion drawn
+Render_Init();
+Render_Line(-10, 50, 10, 50, 0xCC);
+ASSERT_EQ(Render_GetPixel(0,  50), 0xCC, "render.line_clipped_left_visible");
+ASSERT_EQ(Render_GetPixel(10, 50), 0xCC, "render.line_clipped_right_visible");
+
+// Both endpoints off-screen with no in-bounds intermediate pixels
+Render_Init();
+Render_Line(-50, -50, -10, -10, 0xDD);
+ASSERT_EQ(Render_GetPixel(0, 0), 0, "render.line_both_off_noop");

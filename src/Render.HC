@@ -114,6 +114,51 @@ U0 Render_HLine(I64 x, I64 y, I64 len, U8 color) {
   Q_memset(render_buf + y * RENDER_W + x0, color, x1 - x0);
 }
 
+// Bresenham line. Generic algorithm handling all 8 octants via
+// step + error accumulation. Uses Render_PutPixel so it inherits
+// the clip behavior — caller can hand off-screen endpoints
+// without crashing. Color is the Quake palette index.
+U0 Render_Line(I64 x0, I64 y0, I64 x1, I64 y1, U8 color) {
+  I64 dx = x1 - x0;
+  if (dx < 0) {
+    dx = -dx;
+  }
+  I64 dy = y1 - y0;
+  if (dy < 0) {
+    dy = -dy;
+  }
+  I64 sx;
+  if (x0 < x1) {
+    sx = 1;
+  } else {
+    sx = -1;
+  }
+  I64 sy;
+  if (y0 < y1) {
+    sy = 1;
+  } else {
+    sy = -1;
+  }
+  I64 err = dx - dy;
+  I64 x = x0;
+  I64 y = y0;
+  while (TRUE) {
+    Render_PutPixel(x, y, color);
+    if (x == x1 && y == y1) {
+      return;
+    }
+    I64 e2 = err << 1;
+    if (e2 > -dy) {
+      err = err - dy;
+      x = x + sx;
+    }
+    if (e2 < dx) {
+      err = err + dx;
+      y = y + sy;
+    }
+  }
+}
+
 // Quantize a Quake palette index (0..255) to a TempleOS color
 // (0..15). Phase 9.1 ships a crude `low 4 bits` mapping —
 // enough to put visible pixels on screen and validate the
