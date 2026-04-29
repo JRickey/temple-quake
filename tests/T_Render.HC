@@ -167,3 +167,34 @@ ASSERT_EQ(Render_GetPixel(10, 50), 0xCC, "render.line_clipped_right_visible");
 Render_Init();
 Render_Line(-50, -50, -10, -10, 0xDD);
 ASSERT_EQ(Render_GetPixel(0, 0), 0, "render.line_both_off_noop");
+
+// ---- Render_Quantize via the generated 256→16 table ----
+//
+// Spot-check key palette positions. The exact mappings come from
+// gen-palette.py's synthetic Quake palette + nearest-RGB
+// against TempleOS's CGA-derived 16-color DC palette.
+
+// Index 0 (black) → BLACK (0)
+ASSERT_EQ(Render_Quantize(0),    0, "quant.black");
+// Index 15 (full white in the grayscale ramp) → WHITE (15)
+ASSERT_EQ(Render_Quantize(15),  15, "quant.white");
+// Index 7 (~127 RGB mid-gray) — closer to DKGRAY (85,85,85) than
+// LTGRAY (170,170,170) by 1 unit. Table maps 7 → 8.
+ASSERT_EQ(Render_Quantize(7),    8, "quant.midgray_dkgray");
+// Index 240 (red brightlight) → RED (4)
+ASSERT_EQ(Render_Quantize(240),  4, "quant.bright_red");
+// Index 241 (green brightlight) → GREEN (2)
+ASSERT_EQ(Render_Quantize(241),  2, "quant.bright_green");
+// Index 252 (white brightlight) → WHITE (15)
+ASSERT_EQ(Render_Quantize(252), 15, "quant.bright_white");
+// Every entry must be in 0..15 (table is bounds-correct)
+I64 _q_idx;
+Bool _q_in_range = TRUE;
+for (_q_idx = 0; _q_idx < 256; _q_idx++) {
+  U8 _q_v = Render_Quantize(_q_idx);
+  if (_q_v > 15) {
+    _q_in_range = FALSE;
+    break;
+  }
+}
+ASSERT_EQ(_q_in_range == TRUE, 1, "quant.all_entries_in_range");
