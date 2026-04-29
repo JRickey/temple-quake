@@ -1,7 +1,8 @@
 REPO  := $(shell pwd)
 DEVKIT := $(REPO)/devkit
 
-.PHONY: help test test-temple lint dev-temple down boot disk install setup vm
+.PHONY: help test test-temple lint dev-temple down boot disk install setup vm \
+	vm-status vm-screen vm-logs vm-reset vm-down vm-warmup vm-revert vm-snapshots watch
 
 help:
 	@echo "make setup           fetch TempleOS ISO into devkit/vendor/templeos/"
@@ -30,7 +31,18 @@ dev-temple:
 # live one. Either way, push our src/ + tests/ via temple-run.py.
 test test-temple:
 	SRC_DIR=$(REPO)/src TEST_DIR=$(REPO)/tests \
-	$(MAKE) -C $(DEVKIT) test-temple T="$(T)"
+	$(MAKE) -C $(DEVKIT) test-temple T="$(T)" WARM="$(WARM)"
+
+# VM lifecycle proxies — forward the temple-quake src/ + tests/ paths
+# to the devkit Makefile. Without these, `make vm-warmup` from the
+# project root pushes the devkit's OWN src/ instead of ours, which
+# breaks the snapshot fast-path.
+vm-status vm-screen vm-logs vm-reset vm-down vm-revert vm-snapshots watch:
+	$(MAKE) -C $(DEVKIT) $@
+
+vm-warmup:
+	SRC_DIR=$(REPO)/src TEST_DIR=$(REPO)/tests \
+	$(MAKE) -C $(DEVKIT) vm-warmup
 
 lint:
 	python3 $(DEVKIT)/scripts/holyc-lint.py $(REPO)/src $(REPO)/tests
